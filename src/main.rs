@@ -211,6 +211,56 @@ impl World {
         world
     }
 
+    fn from_genome_snapshot(snapshot: GenomeSnapshot, w: usize, h: usize) -> Self {
+        let channels = snapshot.channels.clamp(MIN_CHANNELS, MAX_CHANNELS);
+        let w = w.max(24);
+        let h = h.max(12);
+        let rng = StdRng::seed_from_u64(snapshot.seed ^ 0x6D65_6D6F_7279);
+
+        let rules = snapshot
+            .rules
+            .into_iter()
+            .map(|rule| Rule {
+                from: rule.from.min(channels - 1),
+                to: rule.to.min(channels - 1),
+                mu: rule.mu,
+                sigma: rule.sigma,
+                weight: rule.weight,
+                taps: rule
+                    .taps
+                    .into_iter()
+                    .map(|tap| KernelTap {
+                        dx: tap.dx,
+                        dy: tap.dy,
+                        weight: tap.weight,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let mut world = Self {
+            seed: snapshot.seed,
+            tick: 0,
+            w,
+            h,
+            channels,
+            base_rules: snapshot.base_rules,
+            radius: snapshot.kernel_radius,
+            cells: vec![0.0; w * h * channels],
+            next: vec![0.0; w * h * channels],
+            rules,
+            rng,
+            last_center_x: 0.0,
+            last_center_y: 0.0,
+            motion_score: 0.0,
+            entropy_score: 0.0,
+        };
+
+        world.seed_life();
+        world.refresh_motion_baseline();
+        world
+    }
+
     fn resize(&mut self, new_w: usize, new_h: usize) {
         let new_w = new_w.max(24);
         let new_h = new_h.max(12);
@@ -773,6 +823,38 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                             )
                         };
                     }
+                    KeyCode::Char('l') => match genome_vault.load_random_snapshot()? {
+                        Some((genome_id, snapshot)) => {
+                            world = World::from_genome_snapshot(snapshot, world.w, world.h);
+                            status_note = format!(
+                                "loaded genome={}  {}  {}  {}",
+                                genome_id,
+                                chronicle.status(),
+                                bestiary.status(),
+                                genome_vault.status()
+                            );
+                        }
+                        None => {
+                            status_note =
+                                "no saved genomes yet, press s to save one first".to_string();
+                        }
+                    },
+                    KeyCode::Char('L') => match genome_vault.load_best_snapshot()? {
+                        Some((genome_id, snapshot)) => {
+                            world = World::from_genome_snapshot(snapshot, world.w, world.h);
+                            status_note = format!(
+                                "loaded best genome={}  {}  {}  {}",
+                                genome_id,
+                                chronicle.status(),
+                                bestiary.status(),
+                                genome_vault.status()
+                            );
+                        }
+                        None => {
+                            status_note =
+                                "no saved genomes yet, press s to save one first".to_string();
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -856,7 +938,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = save + rebirth    genomes stay local",
+                "q / esc = save + quit    s = save genome    r = rebirth    l = load random genome    L = load best genome",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);

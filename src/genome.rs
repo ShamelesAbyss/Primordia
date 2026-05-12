@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -73,14 +74,15 @@ pub struct GenomeVault {
 impl GenomeVault {
     pub fn load_or_new() -> Self {
         if let Ok(data) = std::fs::read_to_string(GENOME_INDEX) {
-            if let Ok(vault) = serde_json::from_str::<GenomeVault>(&data) {
+            if let Ok(mut vault) = serde_json::from_str::<GenomeVault>(&data) {
+                vault.version = 2;
                 return vault;
             }
         }
 
         let now = unix_now();
         Self {
-            version: 1,
+            version: 2,
             created_at_unix: now,
             updated_at_unix: now,
             total_saved: 0,
@@ -130,6 +132,36 @@ impl GenomeVault {
         self.save()?;
 
         Ok(id)
+    }
+
+    pub fn load_random_snapshot(&self) -> Result<Option<(String, GenomeSnapshot)>> {
+        if self.entries.is_empty() {
+            return Ok(None);
+        }
+
+        let seed = unix_now() ^ self.total_saved ^ self.entries.len() as u64;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let index = rng.gen_range(0..self.entries.len());
+        self.load_snapshot_by_index(index)
+    }
+
+    pub fn load_best_snapshot(&self) -> Result<Option<(String, GenomeSnapshot)>> {
+        if self.entries.is_empty() {
+            return Ok(None);
+        }
+
+        self.load_snapshot_by_index(0)
+    }
+
+    fn load_snapshot_by_index(&self, index: usize) -> Result<Option<(String, GenomeSnapshot)>> {
+        let Some(entry) = self.entries.get(index) else {
+            return Ok(None);
+        };
+
+        let path = format!("{}/{}.json", GENOME_DIR, entry.id);
+        let data = std::fs::read_to_string(path)?;
+        let snapshot = serde_json::from_str::<GenomeSnapshot>(&data)?;
+        Ok(Some((entry.id.clone(), snapshot)))
     }
 
     pub fn save(&self) -> Result<()> {
