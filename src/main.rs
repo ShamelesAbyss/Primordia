@@ -1218,33 +1218,72 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let mut catchup = 0;
         while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
             if gpu_live_enabled {
-                match gpu::live_step_readback(
-                    world.w as u32,
-                    world.h as u32,
-                    world.channels as u32,
-                    &world.cells,
-                ) {
-                    Ok(next_cells) if next_cells.len() == world.cells.len() => {
-                        world.cells = next_cells;
-                        world.tick = world.tick.saturating_add(1);
-                        world.update_motion_memory();
+                #[cfg(feature = "gpu")]
+                {
+                    let mut gpu_rules = Vec::with_capacity(world.rules.len());
+                    let mut gpu_taps = Vec::new();
+
+                    for rule in &world.rules {
+                        let tap_start = gpu_taps.len() as u32;
+
+                        for tap in &rule.taps {
+                            gpu_taps.push(gpu::GpuTapData {
+                                dx: tap.dx,
+                                dy: tap.dy,
+                                weight: tap.weight,
+                                _pad: 0.0,
+                            });
+                        }
+
+                        gpu_rules.push(gpu::GpuRuleData {
+                            from: rule.from as u32,
+                            to: rule.to as u32,
+                            tap_start,
+                            tap_count: rule.taps.len() as u32,
+                            mu: rule.mu,
+                            sigma: rule.sigma,
+                            weight: rule.weight,
+                            _pad: 0.0,
+                        });
                     }
-                    Ok(_) => {
-                        gpu_live_enabled = false;
-                        status_note = "GPU live disabled: readback size mismatch, returned to CPU"
-                            .to_string();
-                        world.step();
+
+                    match gpu::live_lenia_step_readback(
+                        world.w as u32,
+                        world.h as u32,
+                        world.channels as u32,
+                        &world.cells,
+                        &gpu_rules,
+                        &gpu_taps,
+                    ) {
+                        Ok(next_cells) if next_cells.len() == world.cells.len() => {
+                            world.cells = next_cells;
+                            world.tick = world.tick.saturating_add(1);
+                            world.update_motion_memory();
+                        }
+                        Ok(_) => {
+                            gpu_live_enabled = false;
+                            status_note =
+                                "GPU live disabled: readback size mismatch, returned to CPU"
+                                    .to_string();
+                            world.step();
+                        }
+                        Err(err) => {
+                            gpu_live_enabled = false;
+                            status_note = format!("GPU live disabled: {}, returned to CPU", err);
+                            world.step();
+                        }
                     }
-                    Err(err) => {
-                        gpu_live_enabled = false;
-                        status_note = format!("GPU live disabled: {}, returned to CPU", err);
-                        world.step();
-                    }
+                }
+
+                #[cfg(not(feature = "gpu"))]
+                {
+                    gpu_live_enabled = false;
+                    status_note = "GPU live unavailable in CPU build, returned to CPU".to_string();
+                    world.step();
                 }
             } else {
                 world.step();
             }
-
             if world.is_extinct() {
                 extinction_ticks = extinction_ticks.saturating_add(1);
             } else {
