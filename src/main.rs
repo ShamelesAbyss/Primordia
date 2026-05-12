@@ -532,7 +532,7 @@ impl World {
         self.update_motion_memory();
         self.tick += 1;
 
-        if self.tick % 2400 == 0 {
+        if self.tick % 2400 == 0 && !self.field_is_zero() {
             self.seed_life();
         }
     }
@@ -617,7 +617,20 @@ impl World {
         self.entropy_score = 0.0;
     }
 
+    fn field_is_zero(&self) -> bool {
+        self.cells.iter().all(|v| *v == 0.0)
+    }
+
     fn update_motion_memory(&mut self) {
+        if self.field_is_zero() {
+            self.motion_score = 0.0;
+            self.entropy_score = 0.0;
+            let (cx, cy, _) = self.center_of_mass();
+            self.last_center_x = cx;
+            self.last_center_y = cy;
+            return;
+        }
+
         let (cx, cy, _) = self.center_of_mass();
 
         let dx = (cx - self.last_center_x).abs();
@@ -655,6 +668,28 @@ impl World {
 
         let raw_entropy = (lively * 0.45 + not_saturated * 0.35 + not_dead * 0.20).clamp(0.0, 1.0);
         self.entropy_score = self.entropy_score * 0.985 + raw_entropy * 0.015;
+    }
+
+    fn is_extinct(&self) -> bool {
+        if !self.field_is_zero() {
+            return false;
+        }
+
+        if self.mass() != 0.0 {
+            return false;
+        }
+
+        if self.motion_score != 0.0 {
+            return false;
+        }
+
+        for c in 0..self.channels {
+            if self.channel_mass(c) != 0.0 {
+                return false;
+            }
+        }
+
+        true
     }
 
     fn channel_name(c: usize) -> &'static str {
@@ -730,6 +765,68 @@ impl World {
         };
 
         (glyph, color)
+    }
+
+    #[allow(dead_code)]
+    fn inject_genome_snapshot(&mut self, snapshot: GenomeSnapshot) {
+        let target_channels = self
+            .channels
+            .max(snapshot.channels)
+            .clamp(MIN_CHANNELS, MAX_CHANNELS);
+
+        if target_channels != self.channels {
+            let mut new_cells = vec![0.0; self.w * self.h * target_channels];
+
+            for y in 0..self.h {
+                for x in 0..self.w {
+                    for c in 0..self.channels {
+                        let old_idx = self.idx(x, y, c);
+                        let new_idx = (y * self.w + x) * target_channels + c;
+                        new_cells[new_idx] = self.cells[old_idx];
+                    }
+                }
+            }
+
+            self.channels = target_channels;
+            self.cells = new_cells;
+            self.next = vec![0.0; self.w * self.h * self.channels];
+        }
+
+        let available_slots = 36usize.saturating_sub(self.rules.len());
+        let take_rules = available_slots.min(snapshot.rules.len()).min(10);
+
+        for rule in snapshot.rules.into_iter().take(take_rules) {
+            self.rules.push(Rule {
+                from: rule.from.min(self.channels - 1),
+                to: rule.to.min(self.channels - 1),
+                mu: rule.mu,
+                sigma: rule.sigma,
+                weight: rule.weight,
+                taps: rule
+                    .taps
+                    .into_iter()
+                    .map(|tap| KernelTap {
+                        dx: tap.dx,
+                        dy: tap.dy,
+                        weight: tap.weight,
+                    })
+                    .collect(),
+            });
+        }
+
+        self.base_rules = self
+            .base_rules
+            .max(self.rules.len().saturating_sub(self.channels));
+        self.radius = self
+            .radius
+            .max(snapshot.kernel_radius)
+            .clamp(MIN_RADIUS, MAX_RADIUS);
+
+        for _ in 0..8 {
+            self.seed_life();
+        }
+
+        self.refresh_motion_baseline();
     }
 
     fn genome_snapshot(&self, reason: &str) -> GenomeSnapshot {
@@ -927,6 +1024,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         bestiary.status(),
         genome_vault.status()
     );
+    let mut extinction_ticks: u64 = 0;
+    let extinction_threshold: u64 = 1000;
+    let mut extinction_rebirths: u64 = 0;
 
     loop {
         while event::poll(Duration::from_millis(1))? {
@@ -1106,10 +1206,90 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let mut catchup = 0;
         while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
             world.step();
+
+            if world.is_extinct() {
+                extinction_ticks = extinction_ticks.saturating_add(1);
+            } else {
+                extinction_ticks = 0;
+            }
+
+            if extinction_ticks >= extinction_threshold {
+                let record = world.chronicle_record("extinction_resuscitation");
+                chronicle.record(record.clone());
+
+                let discovery = bestiary.consider(&record)?;
+                if discovery.is_some() {
+                    let _ = genome_vault.save_snapshot(
+                        &world.genome_snapshot("bestiary_extinction_resuscitation"),
+                    )?;
+                }
+
+                extinction_rebirths = extinction_rebirths.saturating_add(1);
+
+                let recovery_cause;
+
+                if let Some((parent_id, child_snapshot)) = genome_vault.mutated_best_snapshot()? {
+                    let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+                    world.inject_genome_snapshot(child_snapshot);
+
+                    recovery_cause = format!(
+                        "memory mutation injection child={} parent={}",
+                        child_id, parent_id
+                    );
+                } else if let Some((parent_a, parent_b, child_snapshot)) =
+                    genome_vault.breed_best_two()?
+                {
+                    let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+                    world.inject_genome_snapshot(child_snapshot);
+
+                    recovery_cause = format!(
+                        "hybrid memory injection child={} parents={}+{}",
+                        child_id, parent_a, parent_b
+                    );
+                } else if let Some((genome_id, snapshot)) = genome_vault.load_best_snapshot()? {
+                    world.inject_genome_snapshot(snapshot);
+
+                    recovery_cause = format!("best genome injection genome={}", genome_id);
+                } else {
+                    world = World::new(world.w, world.h, chronicle.suggest_bias());
+                    for _ in 0..8 {
+                        world.seed_life();
+                    }
+                    world.refresh_motion_baseline();
+
+                    recovery_cause = "fresh memory-biased rebirth".to_string();
+                }
+
+                extinction_ticks = 0;
+
+                chronicle.save()?;
+                bestiary.save()?;
+                genome_vault.save()?;
+
+                status_note = if let Some(note) = discovery {
+                    format!(
+                        "CAUSE=EXTINCTION RECOVERY #{}  {}  {}  {}",
+                        extinction_rebirths,
+                        recovery_cause,
+                        note,
+                        genome_vault.status()
+                    )
+                } else {
+                    format!(
+                        "CAUSE=EXTINCTION RECOVERY #{}  {}  runs={}  {}  {}  {}",
+                        extinction_rebirths,
+                        recovery_cause,
+                        chronicle.total_runs_recorded,
+                        chronicle.status(),
+                        bestiary.status(),
+                        genome_vault.status()
+                    )
+                };
+            }
+
             last_sim_tick += sim_step;
             catchup += 1;
         }
-
         if last_render.elapsed() < render_step {
             continue;
         }
