@@ -46,6 +46,9 @@ pub struct GenomeSnapshot {
     pub entropy_score: f32,
     pub mass: f32,
     pub rules: Vec<RuleGenome>,
+
+    #[serde(default)]
+    pub cells: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +63,8 @@ pub struct GenomeIndexEntry {
     pub motion_score: f32,
     pub entropy_score: f32,
     pub mass: f32,
+    #[serde(default)]
+    pub has_body_snapshot: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,14 +80,14 @@ impl GenomeVault {
     pub fn load_or_new() -> Self {
         if let Ok(data) = std::fs::read_to_string(GENOME_INDEX) {
             if let Ok(mut vault) = serde_json::from_str::<GenomeVault>(&data) {
-                vault.version = 2;
+                vault.version = 3;
                 return vault;
             }
         }
 
         let now = unix_now();
         Self {
-            version: 2,
+            version: 3,
             created_at_unix: now,
             updated_at_unix: now,
             total_saved: 0,
@@ -116,6 +121,7 @@ impl GenomeVault {
             motion_score: snapshot.motion_score,
             entropy_score: snapshot.entropy_score,
             mass: snapshot.mass,
+            has_body_snapshot: !snapshot.cells.is_empty(),
         });
 
         self.entries.sort_by(|a, b| {
@@ -160,7 +166,8 @@ impl GenomeVault {
 
         let path = format!("{}/{}.json", GENOME_DIR, entry.id);
         let data = std::fs::read_to_string(path)?;
-        let snapshot = serde_json::from_str::<GenomeSnapshot>(&data)?;
+        let mut snapshot = serde_json::from_str::<GenomeSnapshot>(&data)?;
+        snapshot.version = snapshot.version.max(3);
         Ok(Some((entry.id.clone(), snapshot)))
     }
 
@@ -176,7 +183,13 @@ impl GenomeVault {
     }
 
     pub fn status(&self) -> String {
-        format!("genomes={}", self.entries.len())
+        let body_count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.has_body_snapshot)
+            .count();
+
+        format!("genomes={} bodies={}", self.entries.len(), body_count)
     }
 }
 

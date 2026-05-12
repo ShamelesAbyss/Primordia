@@ -213,8 +213,20 @@ impl World {
 
     fn from_genome_snapshot(snapshot: GenomeSnapshot, w: usize, h: usize) -> Self {
         let channels = snapshot.channels.clamp(MIN_CHANNELS, MAX_CHANNELS);
-        let w = w.max(24);
-        let h = h.max(12);
+
+        let saved_w = snapshot.field_w.max(24);
+        let saved_h = snapshot.field_h.max(12);
+        let w = if snapshot.cells.is_empty() {
+            w.max(24)
+        } else {
+            saved_w
+        };
+        let h = if snapshot.cells.is_empty() {
+            h.max(12)
+        } else {
+            saved_h
+        };
+
         let rng = StdRng::seed_from_u64(snapshot.seed ^ 0x6D65_6D6F_7279);
 
         let rules = snapshot
@@ -238,25 +250,33 @@ impl World {
             })
             .collect::<Vec<_>>();
 
+        let expected_len = w * h * channels;
         let mut world = Self {
             seed: snapshot.seed,
-            tick: 0,
+            tick: snapshot.tick,
             w,
             h,
             channels,
             base_rules: snapshot.base_rules,
             radius: snapshot.kernel_radius,
-            cells: vec![0.0; w * h * channels],
-            next: vec![0.0; w * h * channels],
+            cells: if snapshot.cells.len() == expected_len {
+                snapshot.cells
+            } else {
+                vec![0.0; expected_len]
+            },
+            next: vec![0.0; expected_len],
             rules,
             rng,
             last_center_x: 0.0,
             last_center_y: 0.0,
-            motion_score: 0.0,
-            entropy_score: 0.0,
+            motion_score: snapshot.motion_score,
+            entropy_score: snapshot.entropy_score,
         };
 
-        world.seed_life();
+        if world.cells.iter().all(|v| *v <= 0.0) {
+            world.seed_life();
+        }
+
         world.refresh_motion_baseline();
         world
     }
@@ -586,7 +606,7 @@ impl World {
         }
 
         GenomeSnapshot {
-            version: 1,
+            version: 3,
             seed: self.seed,
             saved_at_unix: unix_now(),
             reason: reason.to_string(),
@@ -600,6 +620,7 @@ impl World {
             entropy_score: self.entropy_score,
             mass: self.mass(),
             rules,
+            cells: self.cells.clone(),
         }
     }
 
@@ -938,7 +959,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = rebirth    l = load random genome    L = load best genome",
+                "q / esc = save + quit    s = save genome    r = rebirth    l = restore random body    L = restore best body",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
