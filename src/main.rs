@@ -27,11 +27,11 @@ use std::{
 };
 
 const MIN_CHANNELS: usize = 3;
-const MAX_CHANNELS: usize = 6;
+const MAX_CHANNELS: usize = 12;
 const MIN_RULES: usize = 4;
-const MAX_RULES: usize = 12;
+const MAX_RULES: usize = 28;
 const MIN_RADIUS: i32 = 4;
-const MAX_RADIUS: i32 = 7;
+const MAX_RADIUS: i32 = 9;
 const DT: f32 = 0.048;
 
 #[derive(Clone)]
@@ -792,8 +792,8 @@ impl World {
             self.next = vec![0.0; self.w * self.h * self.channels];
         }
 
-        let available_slots = 36usize.saturating_sub(self.rules.len());
-        let take_rules = available_slots.min(snapshot.rules.len()).min(10);
+        let available_slots = 96usize.saturating_sub(self.rules.len());
+        let take_rules = available_slots.min(snapshot.rules.len()).min(24);
 
         for rule in snapshot.rules.into_iter().take(take_rules) {
             self.rules.push(Rule {
