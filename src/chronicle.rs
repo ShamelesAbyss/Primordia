@@ -35,6 +35,17 @@ pub struct RunRecord {
     pub score: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChronicleBias {
+    pub target_channels: usize,
+    pub target_base_rules: usize,
+    pub target_radius: i32,
+    pub target_mu: f32,
+    pub target_sigma: f32,
+    pub target_weight: f32,
+    pub strength: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chronicle {
     pub version: u32,
@@ -79,6 +90,48 @@ impl Chronicle {
         }
     }
 
+    pub fn suggest_bias(&self) -> Option<ChronicleBias> {
+        if self.best.len() < 3 {
+            return None;
+        }
+
+        let take = self.best.len().min(8);
+        let mut score_total = 0.0;
+        let mut channels = 0.0;
+        let mut base_rules = 0.0;
+        let mut radius = 0.0;
+        let mut mu = 0.0;
+        let mut sigma = 0.0;
+        let mut weight = 0.0;
+
+        for record in self.best.iter().take(take) {
+            let score = record.score.max(0.05);
+            score_total += score;
+            channels += record.channels as f32 * score;
+            base_rules += record.base_rules as f32 * score;
+            radius += record.kernel_radius as f32 * score;
+            mu += record.avg_rule_mu * score;
+            sigma += record.avg_rule_sigma * score;
+            weight += record.avg_rule_weight * score;
+        }
+
+        if score_total <= 0.0 {
+            return None;
+        }
+
+        let strength = (self.total_runs_recorded as f32 / 32.0).clamp(0.08, 0.38);
+
+        Some(ChronicleBias {
+            target_channels: (channels / score_total).round().clamp(3.0, 6.0) as usize,
+            target_base_rules: (base_rules / score_total).round().clamp(4.0, 12.0) as usize,
+            target_radius: (radius / score_total).round().clamp(4.0, 7.0) as i32,
+            target_mu: (mu / score_total).clamp(0.12, 0.46),
+            target_sigma: (sigma / score_total).clamp(0.022, 0.095),
+            target_weight: (weight / score_total).clamp(-0.46, 0.60),
+            strength,
+        })
+    }
+
     pub fn record(&mut self, mut record: RunRecord) {
         record.saved_at_unix = unix_now();
         self.updated_at_unix = record.saved_at_unix;
@@ -119,12 +172,19 @@ impl Chronicle {
     }
 
     pub fn status(&self) -> String {
+        let mode = if self.suggest_bias().is_some() {
+            "memory-bias active"
+        } else {
+            "pure-random learning"
+        };
+
         format!(
-            "chronicle runs={} recent={} best={} best_score={:.3}",
+            "chronicle runs={} recent={} best={} best_score={:.3} {}",
             self.total_runs_recorded,
             self.recent.len(),
             self.best.len(),
-            self.best_score_seen
+            self.best_score_seen,
+            mode
         )
     }
 }

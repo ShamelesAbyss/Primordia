@@ -1,6 +1,6 @@
 mod chronicle;
 use anyhow::Result;
-use chronicle::{unix_now, Chronicle, RunRecord};
+use chronicle::{unix_now, Chronicle, ChronicleBias, RunRecord};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -60,7 +60,12 @@ struct World {
 }
 
 impl Rule {
-    fn random(rng: &mut StdRng, channels: usize, radius: i32) -> Self {
+    fn random(
+        rng: &mut StdRng,
+        channels: usize,
+        radius: i32,
+        bias: Option<&ChronicleBias>,
+    ) -> Self {
         let from = rng.gen_range(0..channels);
         let to = rng.gen_range(0..channels);
         let ring_count = rng.gen_range(2..6);
@@ -105,32 +110,56 @@ impl Rule {
             tap.weight /= total.max(0.0001);
         }
 
+        let mut mu = rng.gen_range(0.12..0.46);
+        let mut sigma = rng.gen_range(0.022..0.095);
+        let mut weight = rng.gen_range(-0.46..0.60);
+
+        if let Some(memory) = bias {
+            if rng.gen_bool(memory.strength as f64) {
+                mu = blend(mu, memory.target_mu, memory.strength).clamp(0.12, 0.46);
+                sigma = blend(sigma, memory.target_sigma, memory.strength).clamp(0.022, 0.095);
+                weight = blend(weight, memory.target_weight, memory.strength).clamp(-0.46, 0.60);
+            }
+        }
+
         Self {
             from,
             to,
-            mu: rng.gen_range(0.12..0.46),
-            sigma: rng.gen_range(0.022..0.095),
-            weight: rng.gen_range(-0.46..0.60),
+            mu,
+            sigma,
+            weight,
             taps,
         }
     }
 }
-
 impl World {
-    fn new(w: usize, h: usize) -> Self {
+    fn new(w: usize, h: usize, bias: Option<ChronicleBias>) -> Self {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        Self::from_seed(seed, w, h)
+        Self::from_seed(seed, w, h, bias)
     }
 
-    fn from_seed(seed: u64, w: usize, h: usize) -> Self {
+    fn from_seed(seed: u64, w: usize, h: usize, bias: Option<ChronicleBias>) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
-        let channels = rng.gen_range(MIN_CHANNELS..=MAX_CHANNELS);
-        let base_rules = rng.gen_range(MIN_RULES..=MAX_RULES);
-        let radius = rng.gen_range(MIN_RADIUS..=MAX_RADIUS);
+
+        let mut channels = rng.gen_range(MIN_CHANNELS..=MAX_CHANNELS);
+        let mut base_rules = rng.gen_range(MIN_RULES..=MAX_RULES);
+        let mut radius = rng.gen_range(MIN_RADIUS..=MAX_RADIUS);
+
+        if let Some(memory) = &bias {
+            if rng.gen_bool(memory.strength as f64) {
+                channels = memory.target_channels.clamp(MIN_CHANNELS, MAX_CHANNELS);
+            }
+            if rng.gen_bool(memory.strength as f64) {
+                base_rules = memory.target_base_rules.clamp(MIN_RULES, MAX_RULES);
+            }
+            if rng.gen_bool(memory.strength as f64) {
+                radius = memory.target_radius.clamp(MIN_RADIUS, MAX_RADIUS);
+            }
+        }
 
         let w = w.max(24);
         let h = h.max(12);
@@ -138,11 +167,11 @@ impl World {
         let mut rules = Vec::new();
 
         for _ in 0..base_rules {
-            rules.push(Rule::random(&mut rng, channels, radius));
+            rules.push(Rule::random(&mut rng, channels, radius, bias.as_ref()));
         }
 
         for c in 0..channels {
-            let mut self_rule = Rule::random(&mut rng, channels, radius);
+            let mut self_rule = Rule::random(&mut rng, channels, radius, bias.as_ref());
             self_rule.from = c;
             self_rule.to = c;
             rules.push(self_rule);
@@ -165,7 +194,6 @@ impl World {
         world.seed_life();
         world
     }
-
     fn resize(&mut self, new_w: usize, new_h: usize) {
         let new_w = new_w.max(24);
         let new_h = new_h.max(12);
@@ -446,6 +474,10 @@ impl World {
     }
 }
 
+fn blend(a: f32, b: f32, amount: f32) -> f32 {
+    a * (1.0 - amount) + b * amount
+}
+
 fn bell(x: f32, mu: f32, sigma: f32) -> f32 {
     (-((x - mu).powi(2)) / (2.0 * sigma * sigma)).exp()
 }
@@ -468,7 +500,7 @@ fn main() -> Result<()> {
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut chronicle = Chronicle::load_or_new();
-    let mut world = World::new(88, 36);
+    let mut world = World::new(88, 36, chronicle.suggest_bias());
 
     let sim_step = Duration::from_millis(16);
     let render_step = Duration::from_millis(33);
@@ -494,7 +526,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     KeyCode::Char('r') => {
                         chronicle.record(world.chronicle_record("rebirth"));
                         chronicle.save()?;
-                        world = World::new(world.w, world.h);
+                        world = World::new(world.w, world.h, chronicle.suggest_bias());
                         status_note = format!("reborn {}", chronicle.status());
                     }
                     _ => {}
