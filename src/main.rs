@@ -606,7 +606,12 @@ impl World {
         }
 
         GenomeSnapshot {
-            version: 3,
+            version: 4,
+            genome_id: String::new(),
+            parent_id: None,
+            generation: 0,
+            branch_label: String::new(),
+            mutation_strength: 0.0,
             seed: self.seed,
             saved_at_unix: unix_now(),
             reason: reason.to_string(),
@@ -876,6 +881,27 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "no saved genomes yet, press s to save one first".to_string();
                         }
                     },
+                    KeyCode::Char('n') => match genome_vault.mutated_best_snapshot()? {
+                        Some((parent_id, child_snapshot)) => {
+                            let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+                            world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+
+                            chronicle.save()?;
+                            bestiary.save()?;
+                            genome_vault.save()?;
+
+                            status_note = format!(
+                                "spawned mutation={} parent={} {}",
+                                child_id,
+                                parent_id,
+                                genome_vault.status()
+                            );
+                        }
+                        None => {
+                            status_note =
+                                "no genome available to mutate yet, press s first".to_string();
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -959,7 +985,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = rebirth    l = restore random body    L = restore best body",
+                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best genome",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
