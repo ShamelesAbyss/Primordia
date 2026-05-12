@@ -1238,7 +1238,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         }
 
                         gpu_rules.push(gpu::GpuRuleData {
-                            from: rule.from as u32,
+                            src_ch: rule.from as u32,
                             to: rule.to as u32,
                             tap_start,
                             tap_count: rule.taps.len() as u32,

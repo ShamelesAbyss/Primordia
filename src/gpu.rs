@@ -527,7 +527,7 @@ pub fn live_step_readback(
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuRuleData {
-    pub from: u32,
+    pub src_ch: u32,
     pub to: u32,
     pub tap_start: u32,
     pub tap_count: u32,
@@ -770,7 +770,7 @@ fn bind_entry<'a>(binding: u32, buffer: &'a wgpu::Buffer) -> wgpu::BindGroupEntr
 #[cfg(feature = "gpu")]
 const REAL_LENIA_WGSL: &str = r#"
 struct Rule {
-    from: u32,
+    src_ch: u32,
     to: u32,
     tap_start: u32,
     tap_count: u32,
@@ -855,7 +855,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
                 let sx = wrap(i32(x) + tap.dx, params.width);
                 let sy = wrap(i32(y) + tap.dy, params.height);
-                let source_i = idx(sx, sy, rule.from);
+                let source_i = idx(sx, sy, rule.src_ch);
 
                 conv = conv + cells[source_i] * tap.weight;
             }
