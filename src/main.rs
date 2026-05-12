@@ -5,7 +5,7 @@ use anyhow::Result;
 use bestiary::Bestiary;
 use chronicle::{unix_now, Chronicle, ChronicleBias, RunRecord};
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -653,11 +653,15 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     loop {
         while event::poll(Duration::from_millis(1))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         let record = world.chronicle_record("quit_autosave");
                         chronicle.record(record.clone());
-                        if let Some(_note) = bestiary.consider(&record)? {}
+                        let _ = bestiary.consider(&record)?;
                         chronicle.save()?;
                         bestiary.save()?;
                         return Ok(());
@@ -773,7 +777,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save chronicle    r = save + rebirth    bestiary auto-promotes strong worlds",
+                "q / esc = save + quit    s = save chronicle    r = save + rebirth    key releases ignored",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
