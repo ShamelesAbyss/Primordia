@@ -1,4 +1,6 @@
+mod chronicle;
 use anyhow::Result;
+use chronicle::{unix_now, Chronicle, RunRecord};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -370,6 +372,78 @@ impl World {
 
         (glyph, color)
     }
+    fn chronicle_record(&self, reason: &str) -> RunRecord {
+        let mut channel_masses = Vec::with_capacity(self.channels);
+        for c in 0..self.channels {
+            channel_masses.push(self.channel_mass(c));
+        }
+
+        let mut mu_total = 0.0;
+        let mut sigma_total = 0.0;
+        let mut weight_total = 0.0;
+        let mut positive_rules = 0;
+        let mut negative_rules = 0;
+        let mut tap_total = 0usize;
+
+        for rule in &self.rules {
+            mu_total += rule.mu;
+            sigma_total += rule.sigma;
+            weight_total += rule.weight;
+            tap_total += rule.taps.len();
+
+            if rule.weight >= 0.0 {
+                positive_rules += 1;
+            } else {
+                negative_rules += 1;
+            }
+        }
+
+        let rule_count = self.rules.len().max(1) as f32;
+        let mass = self.mass();
+        let ideal_mass = 0.18;
+        let mass_health = (1.0 - (mass - ideal_mass).abs() * 4.0).clamp(0.0, 1.0);
+        let channel_balance = if channel_masses.is_empty() {
+            0.0
+        } else {
+            let avg = channel_masses.iter().sum::<f32>() / channel_masses.len() as f32;
+            let variance = channel_masses
+                .iter()
+                .map(|v| (v - avg).powi(2))
+                .sum::<f32>()
+                / channel_masses.len() as f32;
+            (1.0 - variance * 30.0).clamp(0.0, 1.0)
+        };
+
+        let activity = if self.tick > 300 {
+            1.0
+        } else {
+            self.tick as f32 / 300.0
+        };
+        let score = (mass_health * 0.45 + channel_balance * 0.35 + activity * 0.20).clamp(0.0, 1.0);
+
+        RunRecord {
+            seed: self.seed,
+            saved_at_unix: unix_now(),
+            reason: reason.to_string(),
+            tick: self.tick,
+            field_w: self.w,
+            field_h: self.h,
+            channels: self.channels,
+            rules: self.rules.len(),
+            base_rules: self.base_rules,
+            kernel_radius: self.radius,
+            mass,
+            mass_variance_hint: 1.0 - channel_balance,
+            channel_masses,
+            avg_rule_mu: mu_total / rule_count,
+            avg_rule_sigma: sigma_total / rule_count,
+            avg_rule_weight: weight_total / rule_count,
+            positive_rules,
+            negative_rules,
+            avg_kernel_taps: tap_total as f32 / rule_count,
+            score,
+        }
+    }
 }
 
 fn bell(x: f32, mu: f32, sigma: f32) -> f32 {
@@ -393,29 +467,41 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    let mut chronicle = Chronicle::load_or_new();
     let mut world = World::new(88, 36);
 
-    // Simulation advances at ~60 updates/sec.
     let sim_step = Duration::from_millis(16);
-
-    // Terminal redraws at ~30 FPS.
     let render_step = Duration::from_millis(33);
 
     let mut last_sim_tick = Instant::now();
     let mut last_render = Instant::now();
+    let mut status_note = chronicle.status();
 
     loop {
         while event::poll(Duration::from_millis(1))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('r') => world = World::new(world.w, world.h),
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        chronicle.record(world.chronicle_record("quit_autosave"));
+                        chronicle.save()?;
+                        return Ok(());
+                    }
+                    KeyCode::Char('s') => {
+                        chronicle.record(world.chronicle_record("manual_save"));
+                        chronicle.save()?;
+                        status_note = format!("saved {}", chronicle.status());
+                    }
+                    KeyCode::Char('r') => {
+                        chronicle.record(world.chronicle_record("rebirth"));
+                        chronicle.save()?;
+                        world = World::new(world.w, world.h);
+                        status_note = format!("reborn {}", chronicle.status());
+                    }
                     _ => {}
                 }
             }
         }
 
-        // Advance the simulation independently of rendering.
         let mut catchup = 0;
         while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
             world.step();
@@ -423,7 +509,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             catchup += 1;
         }
 
-        // Skip drawing until the next render interval.
         if last_render.elapsed() < render_step {
             continue;
         }
@@ -434,7 +519,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(7),
+                    Constraint::Length(8),
                     Constraint::Min(10),
                     Constraint::Length(3),
                 ])
@@ -447,11 +532,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             let mut mass_spans = Vec::new();
             for c in 0..world.channels {
                 mass_spans.push(Span::styled(
-                    format!(
-                        "{}={:.3}  ",
-                        World::channel_name(c),
-                        world.channel_mass(c)
-                    ),
+                    format!("{}={:.3}  ", World::channel_name(c), world.channel_mass(c)),
                     Style::default().fg(World::channel_color(c)),
                 ));
             }
@@ -477,6 +558,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     world.radius
                 )),
                 Line::from(mass_spans),
+                Line::from(status_note.clone()),
             ])
             .block(Block::default().borders(Borders::ALL).title("Genesis Core"));
             frame.render_widget(header, chunks[0]);
@@ -486,10 +568,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 let mut spans = Vec::with_capacity(world.w);
                 for x in 0..world.w {
                     let (glyph, color) = world.cell_visual(x, y);
-                    spans.push(Span::styled(
-                        glyph,
-                        Style::default().fg(color),
-                    ));
+                    spans.push(Span::styled(glyph, Style::default().fg(color)));
                 }
                 lines.push(Line::from(spans));
             }
@@ -498,10 +577,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 .block(Block::default().borders(Borders::ALL).title("Living Field"));
             frame.render_widget(canvas, chunks[1]);
 
-            let footer = Paragraph::new(
-                "q / esc = quit    r = rebirth universe    60 simulation ticks/sec, ~30 FPS rendering",
-            )
-            .block(Block::default().borders(Borders::ALL).title("Controls"));
+            let footer =
+                Paragraph::new("q / esc = save + quit    s = save chronicle    r = save + rebirth")
+                    .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
         })?;
     }

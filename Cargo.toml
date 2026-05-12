@@ -7,5 +7,7 @@ description = "Infinite artificial life in Rust. A new universe emerges every la
 [dependencies]
 anyhow = "1"
 crossterm = "0.27"
-ratatui = "0.26"
 rand = "0.8"
+ratatui = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
