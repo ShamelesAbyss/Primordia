@@ -18,6 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
+use rayon::prelude::*;
 use std::{
     io,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -251,44 +252,58 @@ impl World {
     }
 
     fn step(&mut self) {
-        self.next.copy_from_slice(&self.cells);
+        let w = self.w;
+        let h = self.h;
+        let channels = self.channels;
+        let tick = self.tick;
+        let seed = self.seed;
+        let rules = &self.rules;
+        let cells = &self.cells;
 
-        for y in 0..self.h {
-            for x in 0..self.w {
-                let mut delta = vec![0.0_f32; self.channels];
+        self.next
+            .par_chunks_mut(channels)
+            .enumerate()
+            .for_each(|(cell_i, out)| {
+                let x = cell_i % w;
+                let y = cell_i / w;
+                let mut delta = vec![0.0_f32; channels];
 
-                for rule in &self.rules {
+                for rule in rules {
                     let mut conv = 0.0;
 
                     for tap in &rule.taps {
-                        let nx = self.wrap_x(x as i32 + tap.dx);
-                        let ny = self.wrap_y(y as i32 + tap.dy);
-                        conv += self.cells[self.idx(nx, ny, rule.from)] * tap.weight;
+                        let nx = wrap_dim(x as i32 + tap.dx, w);
+                        let ny = wrap_dim(y as i32 + tap.dy, h);
+                        let idx = (ny * w + nx) * channels + rule.from;
+                        conv += cells[idx] * tap.weight;
                     }
 
                     let growth = bell(conv, rule.mu, rule.sigma) * 2.0 - 1.0;
                     delta[rule.to] += growth * rule.weight;
                 }
 
-                for c in 0..self.channels {
-                    let idx = self.idx(x, y, c);
-                    let old = self.cells[idx];
+                for c in 0..channels {
+                    let idx = (y * w + x) * channels + c;
+                    let old = cells[idx];
+
+                    let up = wrap_dim(y as i32 - 1, h);
+                    let down = wrap_dim(y as i32 + 1, h);
+                    let left = wrap_dim(x as i32 - 1, w);
+                    let right = wrap_dim(x as i32 + 1, w);
 
                     let mut lap = 0.0;
-                    lap += self.cells[self.idx(x, self.wrap_y(y as i32 - 1), c)];
-                    lap += self.cells[self.idx(x, self.wrap_y(y as i32 + 1), c)];
-                    lap += self.cells[self.idx(self.wrap_x(x as i32 - 1), y, c)];
-                    lap += self.cells[self.idx(self.wrap_x(x as i32 + 1), y, c)];
+                    lap += cells[(up * w + x) * channels + c];
+                    lap += cells[(down * w + x) * channels + c];
+                    lap += cells[(y * w + left) * channels + c];
+                    lap += cells[(y * w + right) * channels + c];
                     lap -= old * 4.0;
 
                     let pressure = old * old * 0.060;
-                    let noise = self.rng.gen_range(-0.0007..0.0007);
+                    let noise = deterministic_noise(seed, tick, x, y, c) * 0.0007;
 
-                    self.next[idx] =
-                        (old + DT * delta[c] + lap * 0.007 + noise - pressure).clamp(0.0, 1.0);
+                    out[c] = (old + DT * delta[c] + lap * 0.007 + noise - pressure).clamp(0.0, 1.0);
                 }
-            }
-        }
+            });
 
         std::mem::swap(&mut self.cells, &mut self.next);
         self.update_motion_memory();
@@ -576,6 +591,27 @@ impl World {
             score,
         }
     }
+}
+
+fn wrap_dim(v: i32, max: usize) -> usize {
+    v.rem_euclid(max as i32) as usize
+}
+
+fn deterministic_noise(seed: u64, tick: u64, x: usize, y: usize, c: usize) -> f32 {
+    let mut n = seed
+        ^ tick.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (x as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+        ^ (y as u64).wrapping_mul(0x94D0_49BB_1331_11EB)
+        ^ (c as u64).wrapping_mul(0xD6E8_FD9D_AA35_558D);
+
+    n ^= n >> 30;
+    n = n.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    n ^= n >> 27;
+    n = n.wrapping_mul(0x94D0_49BB_1331_11EB);
+    n ^= n >> 31;
+
+    let unit = (n as f32 / u64::MAX as f32).clamp(0.0, 1.0);
+    unit * 2.0 - 1.0
 }
 
 fn blend(a: f32, b: f32, amount: f32) -> f32 {
