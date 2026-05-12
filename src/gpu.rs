@@ -494,3 +494,28 @@ pub fn real_world_bridge_test(
 ) -> Result<String, String> {
     Err("GPU feature disabled".to_string())
 }
+
+#[cfg(feature = "gpu")]
+#[allow(dead_code)]
+pub fn live_step_readback(
+    width: u32,
+    height: u32,
+    channels: u32,
+    cells: &[f32],
+) -> Result<Vec<f32>, String> {
+    pollster::block_on(async {
+        let engine = GpuEngine::new(width, height, channels).await?;
+        engine.run_one_step_readback(cells)
+    })
+}
+
+#[cfg(not(feature = "gpu"))]
+#[allow(dead_code)]
+pub fn live_step_readback(
+    _width: u32,
+    _height: u32,
+    _channels: u32,
+    _cells: &[f32],
+) -> Result<Vec<f32>, String> {
+    Err("GPU feature disabled".to_string())
+}
