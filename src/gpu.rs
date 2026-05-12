@@ -44,6 +44,7 @@ pub struct GpuEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    #[allow(dead_code)]
     layout: wgpu::BindGroupLayout,
     cells_buffer: wgpu::Buffer,
     next_buffer: wgpu::Buffer,
@@ -873,7 +874,9 @@ pub struct RealLeniaGpuEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    #[allow(dead_code)]
     layout: wgpu::BindGroupLayout,
+    bind_group: wgpu::BindGroup,
     cells_buffer: wgpu::Buffer,
     next_buffer: wgpu::Buffer,
     rules_buffer: wgpu::Buffer,
@@ -1022,11 +1025,24 @@ impl RealLeniaGpuEngine {
             mapped_at_creation: false,
         });
 
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Primordia Persistent Real Lenia Bind Group"),
+            layout: &layout,
+            entries: &[
+                bind_entry(0, &cells_buffer),
+                bind_entry(1, &next_buffer),
+                bind_entry(2, &rules_buffer),
+                bind_entry(3, &taps_buffer),
+                bind_entry(4, &params_buffer),
+            ],
+        });
+
         Ok(Self {
             device,
             queue,
             pipeline,
             layout,
+            bind_group,
             cells_buffer,
             next_buffer,
             rules_buffer,
@@ -1099,18 +1115,6 @@ impl RealLeniaGpuEngine {
                 .write_buffer(&self.taps_buffer, 0, bytemuck::cast_slice(taps));
         }
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Primordia Persistent Real Lenia Bind Group"),
-            layout: &self.layout,
-            entries: &[
-                bind_entry(0, &self.cells_buffer),
-                bind_entry(1, &self.next_buffer),
-                bind_entry(2, &self.rules_buffer),
-                bind_entry(3, &self.taps_buffer),
-                bind_entry(4, &self.params_buffer),
-            ],
-        });
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1124,7 +1128,7 @@ impl RealLeniaGpuEngine {
             });
 
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &self.bind_group, &[]);
             pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
         }
 
