@@ -1,4 +1,5 @@
 mod chronicle;
+
 use anyhow::Result;
 use chronicle::{unix_now, Chronicle, ChronicleBias, RunRecord};
 use crossterm::{
@@ -57,6 +58,10 @@ struct World {
     next: Vec<f32>,
     rules: Vec<Rule>,
     rng: StdRng,
+    last_center_x: f32,
+    last_center_y: f32,
+    motion_score: f32,
+    entropy_score: f32,
 }
 
 impl Rule {
@@ -132,6 +137,7 @@ impl Rule {
         }
     }
 }
+
 impl World {
     fn new(w: usize, h: usize, bias: Option<ChronicleBias>) -> Self {
         let seed = SystemTime::now()
@@ -189,11 +195,17 @@ impl World {
             next: vec![0.0; w * h * channels],
             rules,
             rng,
+            last_center_x: 0.0,
+            last_center_y: 0.0,
+            motion_score: 0.0,
+            entropy_score: 0.0,
         };
 
         world.seed_life();
+        world.refresh_motion_baseline();
         world
     }
+
     fn resize(&mut self, new_w: usize, new_h: usize) {
         let new_w = new_w.max(24);
         let new_h = new_h.max(12);
@@ -221,6 +233,7 @@ impl World {
         self.cells = new_cells;
         self.next = vec![0.0; self.w * self.h * self.channels];
         self.seed_life();
+        self.refresh_motion_baseline();
     }
 
     fn idx(&self, x: usize, y: usize, c: usize) -> usize {
@@ -276,6 +289,7 @@ impl World {
         }
 
         std::mem::swap(&mut self.cells, &mut self.next);
+        self.update_motion_memory();
         self.tick += 1;
 
         if self.tick % 2400 == 0 {
@@ -324,6 +338,83 @@ impl World {
             }
         }
         total / (self.w * self.h) as f32
+    }
+
+    fn center_of_mass(&self) -> (f32, f32, f32) {
+        let mut total = 0.0;
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let mut cell_mass = 0.0;
+                for c in 0..self.channels {
+                    cell_mass += self.cells[self.idx(x, y, c)];
+                }
+
+                total += cell_mass;
+                sx += x as f32 * cell_mass;
+                sy += y as f32 * cell_mass;
+            }
+        }
+
+        if total <= 0.0001 {
+            (self.w as f32 * 0.5, self.h as f32 * 0.5, 0.0)
+        } else {
+            (
+                sx / total,
+                sy / total,
+                total / (self.w * self.h * self.channels) as f32,
+            )
+        }
+    }
+
+    fn refresh_motion_baseline(&mut self) {
+        let (cx, cy, _) = self.center_of_mass();
+        self.last_center_x = cx;
+        self.last_center_y = cy;
+        self.motion_score = 0.0;
+        self.entropy_score = 0.0;
+    }
+
+    fn update_motion_memory(&mut self) {
+        let (cx, cy, _) = self.center_of_mass();
+
+        let dx = (cx - self.last_center_x).abs();
+        let dy = (cy - self.last_center_y).abs();
+        let raw_motion = ((dx * dx + dy * dy).sqrt() / self.w.max(self.h) as f32) * 20.0;
+
+        self.motion_score = self.motion_score * 0.985 + raw_motion.clamp(0.0, 1.0) * 0.015;
+        self.last_center_x = cx;
+        self.last_center_y = cy;
+
+        let mut active = 0usize;
+        let mut saturated = 0usize;
+        let mut dead = 0usize;
+
+        for v in &self.cells {
+            if *v > 0.03 {
+                active += 1;
+            }
+            if *v > 0.82 {
+                saturated += 1;
+            }
+            if *v < 0.01 {
+                dead += 1;
+            }
+        }
+
+        let len = self.cells.len().max(1) as f32;
+        let active_ratio = active as f32 / len;
+        let saturated_ratio = saturated as f32 / len;
+        let dead_ratio = dead as f32 / len;
+
+        let lively = (active_ratio * 2.2).clamp(0.0, 1.0);
+        let not_saturated = (1.0 - saturated_ratio * 4.0).clamp(0.0, 1.0);
+        let not_dead = (1.0 - dead_ratio * 0.85).clamp(0.0, 1.0);
+
+        let raw_entropy = (lively * 0.45 + not_saturated * 0.35 + not_dead * 0.20).clamp(0.0, 1.0);
+        self.entropy_score = self.entropy_score * 0.985 + raw_entropy * 0.015;
     }
 
     fn channel_name(c: usize) -> &'static str {
@@ -400,6 +491,7 @@ impl World {
 
         (glyph, color)
     }
+
     fn chronicle_record(&self, reason: &str) -> RunRecord {
         let mut channel_masses = Vec::with_capacity(self.channels);
         for c in 0..self.channels {
@@ -447,7 +539,13 @@ impl World {
         } else {
             self.tick as f32 / 300.0
         };
-        let score = (mass_health * 0.45 + channel_balance * 0.35 + activity * 0.20).clamp(0.0, 1.0);
+
+        let score = (mass_health * 0.28
+            + channel_balance * 0.22
+            + activity * 0.14
+            + self.motion_score * 0.20
+            + self.entropy_score * 0.16)
+            .clamp(0.0, 1.0);
 
         RunRecord {
             seed: self.seed,
@@ -469,6 +567,10 @@ impl World {
             positive_rules,
             negative_rules,
             avg_kernel_taps: tap_total as f32 / rule_count,
+            center_x: self.last_center_x,
+            center_y: self.last_center_y,
+            motion_score: self.motion_score,
+            entropy_score: self.entropy_score,
             score,
         }
     }
@@ -575,10 +677,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     Span::raw("  |  randomized multi-channel Lenia genome"),
                 ]),
                 Line::from(format!(
-                    "seed={}  tick={}  mass={:.4}  field={}x{}",
+                    "seed={}  tick={}  mass={:.4}  motion={:.3}  entropy={:.3}  field={}x{}",
                     world.seed,
                     world.tick,
                     world.mass(),
+                    world.motion_score,
+                    world.entropy_score,
                     world.w,
                     world.h
                 )),

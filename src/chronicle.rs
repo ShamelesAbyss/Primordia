@@ -32,6 +32,14 @@ pub struct RunRecord {
     pub positive_rules: usize,
     pub negative_rules: usize,
     pub avg_kernel_taps: f32,
+    #[serde(default)]
+    pub center_x: f32,
+    #[serde(default)]
+    pub center_y: f32,
+    #[serde(default)]
+    pub motion_score: f32,
+    #[serde(default)]
+    pub entropy_score: f32,
     pub score: f32,
 }
 
@@ -58,6 +66,10 @@ pub struct Chronicle {
     pub avg_rules: f32,
     pub avg_kernel_radius: f32,
     pub avg_mass: f32,
+    #[serde(default)]
+    pub avg_motion_score: f32,
+    #[serde(default)]
+    pub avg_entropy_score: f32,
     pub best_score_seen: f32,
     pub last_seed: Option<u64>,
 }
@@ -67,7 +79,8 @@ impl Chronicle {
         if let Ok(mut file) = File::open(CHRONICLE_PATH) {
             let mut data = String::new();
             if file.read_to_string(&mut data).is_ok() {
-                if let Ok(memory) = serde_json::from_str::<Chronicle>(&data) {
+                if let Ok(mut memory) = serde_json::from_str::<Chronicle>(&data) {
+                    memory.version = 3;
                     return memory;
                 }
             }
@@ -75,7 +88,7 @@ impl Chronicle {
 
         let now = unix_now();
         Self {
-            version: 1,
+            version: 3,
             created_at_unix: now,
             updated_at_unix: now,
             total_runs_recorded: 0,
@@ -85,6 +98,8 @@ impl Chronicle {
             avg_rules: 0.0,
             avg_kernel_radius: 0.0,
             avg_mass: 0.0,
+            avg_motion_score: 0.0,
+            avg_entropy_score: 0.0,
             best_score_seen: 0.0,
             last_seed: None,
         }
@@ -145,6 +160,8 @@ impl Chronicle {
         self.avg_kernel_radius =
             rolling_avg(self.avg_kernel_radius, record.kernel_radius as f32, n);
         self.avg_mass = rolling_avg(self.avg_mass, record.mass, n);
+        self.avg_motion_score = rolling_avg(self.avg_motion_score, record.motion_score, n);
+        self.avg_entropy_score = rolling_avg(self.avg_entropy_score, record.entropy_score, n);
 
         self.recent.push(record.clone());
         if self.recent.len() > MAX_RECENT {
@@ -179,11 +196,12 @@ impl Chronicle {
         };
 
         format!(
-            "chronicle runs={} recent={} best={} best_score={:.3} {}",
+            "chronicle runs={} best={} best={:.3} motion={:.3} entropy={:.3} {}",
             self.total_runs_recorded,
-            self.recent.len(),
             self.best.len(),
             self.best_score_seen,
+            self.avg_motion_score,
+            self.avg_entropy_score,
             mode
         )
     }
