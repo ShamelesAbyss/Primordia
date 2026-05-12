@@ -374,3 +374,36 @@ pub fn probe_gpu() -> GpuStatus {
 pub fn probe_gpu() -> GpuStatus {
     GpuStatus::disabled()
 }
+
+#[cfg(feature = "gpu")]
+#[allow(dead_code)]
+pub fn real_world_bridge_test(
+    width: u32,
+    height: u32,
+    channels: u32,
+    cells: &[f32],
+) -> Result<String, String> {
+    pollster::block_on(async {
+        let engine = GpuEngine::new(width, height, channels).await?;
+        engine.run_one_step(cells)?;
+
+        Ok(format!(
+            "GPU bridge accepted real world buffer {}x{}x{} cells={}",
+            width,
+            height,
+            channels,
+            cells.len()
+        ))
+    })
+}
+
+#[cfg(not(feature = "gpu"))]
+#[allow(dead_code)]
+pub fn real_world_bridge_test(
+    _width: u32,
+    _height: u32,
+    _channels: u32,
+    _cells: &[f32],
+) -> Result<String, String> {
+    Err("GPU feature disabled".to_string())
+}
