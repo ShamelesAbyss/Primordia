@@ -1286,8 +1286,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         ) {
                             Ok(engine) => {
                                 real_lenia_gpu = Some(engine);
-                                status_note =
-                                    "GPU persistent real Lenia engine initialized".to_string();
                             }
                             Err(err) => {
                                 gpu_live_enabled = false;
