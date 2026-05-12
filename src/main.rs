@@ -18,8 +18,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const W: usize = 88;
-const H: usize = 36;
 const CHANNELS: usize = 3;
 const RULES: usize = 4;
 const KERNEL_RADIUS: i32 = 5;
@@ -45,6 +43,8 @@ struct Rule {
 struct World {
     seed: u64,
     tick: u64,
+    w: usize,
+    h: usize,
     cells: Vec<f32>,
     next: Vec<f32>,
     rules: Vec<Rule>,
@@ -106,7 +106,7 @@ impl Rule {
 }
 
 impl World {
-    fn new() -> Self {
+    fn new(w: usize, h: usize) -> Self {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -128,8 +128,10 @@ impl World {
         let mut world = Self {
             seed,
             tick: 0,
-            cells: vec![0.0; W * H * CHANNELS],
-            next: vec![0.0; W * H * CHANNELS],
+            w: w.max(24),
+            h: h.max(12),
+            cells: vec![0.0; w.max(24) * h.max(12) * CHANNELS],
+            next: vec![0.0; w.max(24) * h.max(12) * CHANNELS],
             rules,
             rng,
         };
@@ -138,24 +140,61 @@ impl World {
         world
     }
 
-    fn idx(x: usize, y: usize, c: usize) -> usize {
-        (y * W + x) * CHANNELS + c
+    fn resize(&mut self, new_w: usize, new_h: usize) {
+        let new_w = new_w.max(24);
+        let new_h = new_h.max(12);
+
+        if new_w == self.w && new_h == self.h {
+            return;
+        }
+
+        let mut new_cells = vec![0.0; new_w * new_h * CHANNELS];
+        let copy_w = self.w.min(new_w);
+        let copy_h = self.h.min(new_h);
+
+        for y in 0..copy_h {
+            for x in 0..copy_w {
+                for c in 0..CHANNELS {
+                    let old_idx = self.idx(x, y, c);
+                    let new_idx = (y * new_w + x) * CHANNELS + c;
+                    new_cells[new_idx] = self.cells[old_idx];
+                }
+            }
+        }
+
+        self.w = new_w;
+        self.h = new_h;
+        self.cells = new_cells;
+        self.next = vec![0.0; self.w * self.h * CHANNELS];
+        self.seed_life();
+    }
+
+    fn idx(&self, x: usize, y: usize, c: usize) -> usize {
+        (y * self.w + x) * CHANNELS + c
+    }
+
+    fn wrap_x(&self, x: i32) -> usize {
+        x.rem_euclid(self.w as i32) as usize
+    }
+
+    fn wrap_y(&self, y: i32) -> usize {
+        y.rem_euclid(self.h as i32) as usize
     }
 
     fn step(&mut self) {
         self.next.copy_from_slice(&self.cells);
 
-        for y in 0..H {
-            for x in 0..W {
+        for y in 0..self.h {
+            for x in 0..self.w {
                 let mut delta = [0.0_f32; CHANNELS];
 
                 for rule in &self.rules {
                     let mut conv = 0.0;
 
                     for tap in &rule.taps {
-                        let nx = wrap_x(x as i32 + tap.dx);
-                        let ny = wrap_y(y as i32 + tap.dy);
-                        conv += self.cells[Self::idx(nx, ny, rule.from)] * tap.weight;
+                        let nx = self.wrap_x(x as i32 + tap.dx);
+                        let ny = self.wrap_y(y as i32 + tap.dy);
+                        conv += self.cells[self.idx(nx, ny, rule.from)] * tap.weight;
                     }
 
                     let growth = bell(conv, rule.mu, rule.sigma) * 2.0 - 1.0;
@@ -163,14 +202,14 @@ impl World {
                 }
 
                 for c in 0..CHANNELS {
-                    let idx = Self::idx(x, y, c);
+                    let idx = self.idx(x, y, c);
                     let old = self.cells[idx];
 
                     let mut lap = 0.0;
-                    lap += self.cells[Self::idx(x, wrap_y(y as i32 - 1), c)];
-                    lap += self.cells[Self::idx(x, wrap_y(y as i32 + 1), c)];
-                    lap += self.cells[Self::idx(wrap_x(x as i32 - 1), y, c)];
-                    lap += self.cells[Self::idx(wrap_x(x as i32 + 1), y, c)];
+                    lap += self.cells[self.idx(x, self.wrap_y(y as i32 - 1), c)];
+                    lap += self.cells[self.idx(x, self.wrap_y(y as i32 + 1), c)];
+                    lap += self.cells[self.idx(self.wrap_x(x as i32 - 1), y, c)];
+                    lap += self.cells[self.idx(self.wrap_x(x as i32 + 1), y, c)];
                     lap -= old * 4.0;
 
                     let pressure = old * old * 0.055;
@@ -191,21 +230,24 @@ impl World {
     }
 
     fn seed_life(&mut self) {
+        let min_w = self.w.max(24);
+        let min_h = self.h.max(12);
+
         for _ in 0..self.rng.gen_range(4..9) {
-            let cx = self.rng.gen_range(12..W - 12) as i32;
-            let cy = self.rng.gen_range(8..H - 8) as i32;
-            let radius = self.rng.gen_range(4..10) as i32;
+            let cx = self.rng.gen_range(4..min_w - 4) as i32;
+            let cy = self.rng.gen_range(3..min_h - 3) as i32;
+            let radius = self.rng.gen_range(3..8) as i32;
 
             for y in -radius..=radius {
                 for x in -radius..=radius {
                     let d = ((x * x + y * y) as f32).sqrt();
                     if d <= radius as f32 {
                         let softness = 1.0 - d / radius as f32;
-                        let px = wrap_x(cx + x);
-                        let py = wrap_y(cy + y);
+                        let px = self.wrap_x(cx + x);
+                        let py = self.wrap_y(cy + y);
 
                         for c in 0..CHANNELS {
-                            let idx = Self::idx(px, py, c);
+                            let idx = self.idx(px, py, c);
                             let v = self.rng.gen_range(0.08..0.85) * softness;
                             self.cells[idx] = (self.cells[idx] + v).clamp(0.0, 1.0);
                         }
@@ -221,18 +263,18 @@ impl World {
 
     fn channel_mass(&self, c: usize) -> f32 {
         let mut total = 0.0;
-        for y in 0..H {
-            for x in 0..W {
-                total += self.cells[Self::idx(x, y, c)];
+        for y in 0..self.h {
+            for x in 0..self.w {
+                total += self.cells[self.idx(x, y, c)];
             }
         }
-        total / (W * H) as f32
+        total / (self.w * self.h) as f32
     }
 
     fn cell_visual(&self, x: usize, y: usize) -> (&'static str, Color) {
-        let a = self.cells[Self::idx(x, y, 0)];
-        let b = self.cells[Self::idx(x, y, 1)];
-        let c = self.cells[Self::idx(x, y, 2)];
+        let a = self.cells[self.idx(x, y, 0)];
+        let b = self.cells[self.idx(x, y, 1)];
+        let c = self.cells[self.idx(x, y, 2)];
         let m = a.max(b).max(c);
         let total = a + b + c;
         let spread = (a - b).abs() + (b - c).abs() + (c - a).abs();
@@ -281,14 +323,6 @@ fn bell(x: f32, mu: f32, sigma: f32) -> f32 {
     (-((x - mu).powi(2)) / (2.0 * sigma * sigma)).exp()
 }
 
-fn wrap_x(x: i32) -> usize {
-    x.rem_euclid(W as i32) as usize
-}
-
-fn wrap_y(y: i32) -> usize {
-    y.rem_euclid(H as i32) as usize
-}
-
 fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -306,7 +340,7 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    let mut world = World::new();
+    let mut world = World::new(88, 36);
     let mut last_tick = Instant::now();
 
     loop {
@@ -314,7 +348,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('r') => world = World::new(),
+                    KeyCode::Char('r') => world = World::new(world.w, world.h),
                     _ => {}
                 }
             }
@@ -329,8 +363,16 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             let area = frame.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(6), Constraint::Min(10), Constraint::Length(3)])
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Min(10),
+                    Constraint::Length(3),
+                ])
                 .split(area);
+
+            let canvas_w = chunks[1].width.saturating_sub(2) as usize;
+            let canvas_h = chunks[1].height.saturating_sub(2) as usize;
+            world.resize(canvas_w, canvas_h);
 
             let header = Paragraph::new(vec![
                 Line::from(vec![
@@ -338,12 +380,14 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     Span::raw("  |  expanded randomized multi-channel Lenia"),
                 ]),
                 Line::from(format!(
-                    "seed={}  tick={}  mass={:.4}  rules={}  channels={}",
+                    "seed={}  tick={}  mass={:.4}  rules={}  channels={}  field={}x{}",
                     world.seed,
                     world.tick,
                     world.mass(),
                     world.rules.len(),
-                    CHANNELS
+                    CHANNELS,
+                    world.w,
+                    world.h
                 )),
                 Line::from(format!(
                     "channel mass  cyan={:.4}  green={:.4}  magenta={:.4}",
@@ -355,10 +399,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             .block(Block::default().borders(Borders::ALL).title("Genesis Core"));
             frame.render_widget(header, chunks[0]);
 
-            let mut lines = Vec::with_capacity(H);
-            for y in 0..H {
-                let mut spans = Vec::with_capacity(W);
-                for x in 0..W {
+            let mut lines = Vec::with_capacity(world.h);
+            for y in 0..world.h {
+                let mut spans = Vec::with_capacity(world.w);
+                for x in 0..world.w {
                     let (glyph, color) = world.cell_visual(x, y);
                     spans.push(Span::styled(glyph, Style::default().fg(color)));
                 }
@@ -370,7 +414,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = quit    r = rebirth universe    randomized channels, kernels, weights, and growth rules",
+                "q / esc = quit    r = rebirth universe    dynamically resizes to terminal",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
