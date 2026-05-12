@@ -18,10 +18,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const CHANNELS: usize = 3;
-const RULES: usize = 4;
-const KERNEL_RADIUS: i32 = 5;
-const DT: f32 = 0.055;
+const MIN_CHANNELS: usize = 3;
+const MAX_CHANNELS: usize = 6;
+const MIN_RULES: usize = 4;
+const MAX_RULES: usize = 12;
+const MIN_RADIUS: i32 = 4;
+const MAX_RADIUS: i32 = 7;
+const DT: f32 = 0.048;
 
 #[derive(Clone)]
 struct KernelTap {
@@ -45,6 +48,9 @@ struct World {
     tick: u64,
     w: usize,
     h: usize,
+    channels: usize,
+    base_rules: usize,
+    radius: i32,
     cells: Vec<f32>,
     next: Vec<f32>,
     rules: Vec<Rule>,
@@ -52,35 +58,38 @@ struct World {
 }
 
 impl Rule {
-    fn random(rng: &mut StdRng, from: usize, to: usize) -> Self {
-        let ring_count = rng.gen_range(2..5);
+    fn random(rng: &mut StdRng, channels: usize, radius: i32) -> Self {
+        let from = rng.gen_range(0..channels);
+        let to = rng.gen_range(0..channels);
+        let ring_count = rng.gen_range(2..6);
+        let sparsity = rng.gen_range(0.25..0.58);
         let mut rings = Vec::new();
 
         for _ in 0..ring_count {
-            rings.push(rng.gen_range(0.05..1.0));
+            rings.push(rng.gen_range(0.04..1.0));
         }
 
         let mut taps = Vec::new();
         let mut total = 0.0;
 
-        for dy in -KERNEL_RADIUS..=KERNEL_RADIUS {
-            for dx in -KERNEL_RADIUS..=KERNEL_RADIUS {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
                 if dx == 0 && dy == 0 {
                     continue;
                 }
 
-                if rng.gen_bool(0.42) {
+                if rng.gen_bool(sparsity) {
                     continue;
                 }
 
-                let dist = ((dx * dx + dy * dy) as f32).sqrt() / KERNEL_RADIUS as f32;
+                let dist = ((dx * dx + dy * dy) as f32).sqrt() / radius as f32;
                 if dist > 1.0 {
                     continue;
                 }
 
                 let ring = ((dist * ring_count as f32).floor() as usize).min(ring_count - 1);
                 let center = (ring as f32 + 0.5) / ring_count as f32;
-                let shell = (-((dist - center).powi(2)) / rng.gen_range(0.010..0.035)).exp();
+                let shell = (-((dist - center).powi(2)) / rng.gen_range(0.010..0.040)).exp();
                 let weight = shell * rings[ring];
 
                 if weight > 0.0001 {
@@ -97,9 +106,9 @@ impl Rule {
         Self {
             from,
             to,
-            mu: rng.gen_range(0.14..0.42),
-            sigma: rng.gen_range(0.025..0.090),
-            weight: rng.gen_range(-0.42..0.55),
+            mu: rng.gen_range(0.12..0.46),
+            sigma: rng.gen_range(0.022..0.095),
+            weight: rng.gen_range(-0.46..0.60),
             taps,
         }
     }
@@ -112,26 +121,41 @@ impl World {
             .unwrap_or_default()
             .as_nanos() as u64;
 
+        Self::from_seed(seed, w, h)
+    }
+
+    fn from_seed(seed: u64, w: usize, h: usize) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
+        let channels = rng.gen_range(MIN_CHANNELS..=MAX_CHANNELS);
+        let base_rules = rng.gen_range(MIN_RULES..=MAX_RULES);
+        let radius = rng.gen_range(MIN_RADIUS..=MAX_RADIUS);
+
+        let w = w.max(24);
+        let h = h.max(12);
+
         let mut rules = Vec::new();
 
-        for _ in 0..RULES {
-            let from = rng.gen_range(0..CHANNELS);
-            let to = rng.gen_range(0..CHANNELS);
-            rules.push(Rule::random(&mut rng, from, to));
+        for _ in 0..base_rules {
+            rules.push(Rule::random(&mut rng, channels, radius));
         }
 
-        for c in 0..CHANNELS {
-            rules.push(Rule::random(&mut rng, c, c));
+        for c in 0..channels {
+            let mut self_rule = Rule::random(&mut rng, channels, radius);
+            self_rule.from = c;
+            self_rule.to = c;
+            rules.push(self_rule);
         }
 
         let mut world = Self {
             seed,
             tick: 0,
-            w: w.max(24),
-            h: h.max(12),
-            cells: vec![0.0; w.max(24) * h.max(12) * CHANNELS],
-            next: vec![0.0; w.max(24) * h.max(12) * CHANNELS],
+            w,
+            h,
+            channels,
+            base_rules,
+            radius,
+            cells: vec![0.0; w * h * channels],
+            next: vec![0.0; w * h * channels],
             rules,
             rng,
         };
@@ -148,15 +172,15 @@ impl World {
             return;
         }
 
-        let mut new_cells = vec![0.0; new_w * new_h * CHANNELS];
+        let mut new_cells = vec![0.0; new_w * new_h * self.channels];
         let copy_w = self.w.min(new_w);
         let copy_h = self.h.min(new_h);
 
         for y in 0..copy_h {
             for x in 0..copy_w {
-                for c in 0..CHANNELS {
+                for c in 0..self.channels {
                     let old_idx = self.idx(x, y, c);
-                    let new_idx = (y * new_w + x) * CHANNELS + c;
+                    let new_idx = (y * new_w + x) * self.channels + c;
                     new_cells[new_idx] = self.cells[old_idx];
                 }
             }
@@ -165,12 +189,12 @@ impl World {
         self.w = new_w;
         self.h = new_h;
         self.cells = new_cells;
-        self.next = vec![0.0; self.w * self.h * CHANNELS];
+        self.next = vec![0.0; self.w * self.h * self.channels];
         self.seed_life();
     }
 
     fn idx(&self, x: usize, y: usize, c: usize) -> usize {
-        (y * self.w + x) * CHANNELS + c
+        (y * self.w + x) * self.channels + c
     }
 
     fn wrap_x(&self, x: i32) -> usize {
@@ -186,7 +210,7 @@ impl World {
 
         for y in 0..self.h {
             for x in 0..self.w {
-                let mut delta = [0.0_f32; CHANNELS];
+                let mut delta = vec![0.0_f32; self.channels];
 
                 for rule in &self.rules {
                     let mut conv = 0.0;
@@ -201,7 +225,7 @@ impl World {
                     delta[rule.to] += growth * rule.weight;
                 }
 
-                for c in 0..CHANNELS {
+                for c in 0..self.channels {
                     let idx = self.idx(x, y, c);
                     let old = self.cells[idx];
 
@@ -212,11 +236,11 @@ impl World {
                     lap += self.cells[self.idx(self.wrap_x(x as i32 + 1), y, c)];
                     lap -= old * 4.0;
 
-                    let pressure = old * old * 0.055;
-                    let noise = self.rng.gen_range(-0.0008..0.0008);
+                    let pressure = old * old * 0.060;
+                    let noise = self.rng.gen_range(-0.0007..0.0007);
 
                     self.next[idx] =
-                        (old + DT * delta[c] + lap * 0.008 + noise - pressure).clamp(0.0, 1.0);
+                        (old + DT * delta[c] + lap * 0.007 + noise - pressure).clamp(0.0, 1.0);
                 }
             }
         }
@@ -230,13 +254,12 @@ impl World {
     }
 
     fn seed_life(&mut self) {
-        let min_w = self.w.max(24);
-        let min_h = self.h.max(12);
+        let clusters = self.rng.gen_range(4..10);
 
-        for _ in 0..self.rng.gen_range(4..9) {
-            let cx = self.rng.gen_range(4..min_w - 4) as i32;
-            let cy = self.rng.gen_range(3..min_h - 3) as i32;
-            let radius = self.rng.gen_range(3..8) as i32;
+        for _ in 0..clusters {
+            let cx = self.rng.gen_range(4..self.w - 4) as i32;
+            let cy = self.rng.gen_range(3..self.h - 3) as i32;
+            let radius = self.rng.gen_range(3..9) as i32;
 
             for y in -radius..=radius {
                 for x in -radius..=radius {
@@ -246,10 +269,12 @@ impl World {
                         let px = self.wrap_x(cx + x);
                         let py = self.wrap_y(cy + y);
 
-                        for c in 0..CHANNELS {
-                            let idx = self.idx(px, py, c);
-                            let v = self.rng.gen_range(0.08..0.85) * softness;
-                            self.cells[idx] = (self.cells[idx] + v).clamp(0.0, 1.0);
+                        for c in 0..self.channels {
+                            if self.rng.gen_bool(0.72) {
+                                let idx = self.idx(px, py, c);
+                                let v = self.rng.gen_range(0.06..0.85) * softness;
+                                self.cells[idx] = (self.cells[idx] + v).clamp(0.0, 1.0);
+                            }
                         }
                     }
                 }
@@ -271,15 +296,48 @@ impl World {
         total / (self.w * self.h) as f32
     }
 
-    fn cell_visual(&self, x: usize, y: usize) -> (&'static str, Color) {
-        let a = self.cells[self.idx(x, y, 0)];
-        let b = self.cells[self.idx(x, y, 1)];
-        let c = self.cells[self.idx(x, y, 2)];
-        let m = a.max(b).max(c);
-        let total = a + b + c;
-        let spread = (a - b).abs() + (b - c).abs() + (c - a).abs();
+    fn channel_name(c: usize) -> &'static str {
+        match c {
+            0 => "cyan",
+            1 => "green",
+            2 => "magenta",
+            3 => "red",
+            4 => "blue",
+            _ => "yellow",
+        }
+    }
 
-        let glyph = match m {
+    fn channel_color(c: usize) -> Color {
+        match c {
+            0 => Color::Cyan,
+            1 => Color::Green,
+            2 => Color::Magenta,
+            3 => Color::Red,
+            4 => Color::Blue,
+            _ => Color::Yellow,
+        }
+    }
+
+    fn cell_visual(&self, x: usize, y: usize) -> (&'static str, Color) {
+        let mut dominant = 0usize;
+        let mut strongest = 0.0f32;
+        let mut total = 0.0f32;
+        let mut second = 0.0f32;
+
+        for c in 0..self.channels {
+            let v = self.cells[self.idx(x, y, c)];
+            total += v;
+
+            if v > strongest {
+                second = strongest;
+                strongest = v;
+                dominant = c;
+            } else if v > second {
+                second = v;
+            }
+        }
+
+        let glyph = match strongest {
             v if v < 0.018 => " ",
             v if v < 0.050 => "·",
             v if v < 0.090 => "∙",
@@ -293,26 +351,21 @@ impl World {
             _ => "✦",
         };
 
-        let color = if total > 2.15 {
+        let blend = second > strongest * 0.72 && total > 0.25;
+        let color = if total > self.channels as f32 * 0.70 {
             Color::White
-        } else if spread < 0.09 && total > 0.32 {
-            Color::Yellow
-        } else if a > b * 1.25 && a > c * 1.25 {
-            Color::Cyan
-        } else if b > a * 1.25 && b > c * 1.25 {
-            Color::Green
-        } else if c > a * 1.25 && c > b * 1.25 {
-            Color::Magenta
-        } else if a + b > c * 1.45 {
+        } else if blend && dominant == 0 {
             Color::LightCyan
-        } else if b + c > a * 1.45 {
+        } else if blend && dominant == 1 {
             Color::LightGreen
-        } else if a + c > b * 1.45 {
+        } else if blend && dominant == 2 {
             Color::LightMagenta
-        } else if m > 0.72 {
-            Color::Red
+        } else if blend && dominant == 3 {
+            Color::LightRed
+        } else if blend && dominant == 4 {
+            Color::LightBlue
         } else {
-            Color::Blue
+            Self::channel_color(dominant)
         };
 
         (glyph, color)
@@ -363,38 +416,46 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             let area = frame.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(6),
-                    Constraint::Min(10),
-                    Constraint::Length(3),
-                ])
+                .constraints([Constraint::Length(7), Constraint::Min(10), Constraint::Length(3)])
                 .split(area);
 
             let canvas_w = chunks[1].width.saturating_sub(2) as usize;
             let canvas_h = chunks[1].height.saturating_sub(2) as usize;
             world.resize(canvas_w, canvas_h);
 
+            let mut mass_spans = Vec::new();
+            for c in 0..world.channels {
+                mass_spans.push(Span::styled(
+                    format!(
+                        "{}={:.3}  ",
+                        World::channel_name(c),
+                        world.channel_mass(c)
+                    ),
+                    Style::default().fg(World::channel_color(c)),
+                ));
+            }
+
             let header = Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled("PRIMORDIA", Style::default().fg(Color::Magenta)),
-                    Span::raw("  |  expanded randomized multi-channel Lenia"),
+                    Span::raw("  |  randomized multi-channel Lenia genome"),
                 ]),
                 Line::from(format!(
-                    "seed={}  tick={}  mass={:.4}  rules={}  channels={}  field={}x{}",
+                    "seed={}  tick={}  mass={:.4}  field={}x{}",
                     world.seed,
                     world.tick,
                     world.mass(),
-                    world.rules.len(),
-                    CHANNELS,
                     world.w,
                     world.h
                 )),
                 Line::from(format!(
-                    "channel mass  cyan={:.4}  green={:.4}  magenta={:.4}",
-                    world.channel_mass(0),
-                    world.channel_mass(1),
-                    world.channel_mass(2)
+                    "channels={}  rules={}  base_rules={}  kernel_radius={}",
+                    world.channels,
+                    world.rules.len(),
+                    world.base_rules,
+                    world.radius
                 )),
+                Line::from(mass_spans),
             ])
             .block(Block::default().borders(Borders::ALL).title("Genesis Core"));
             frame.render_widget(header, chunks[0]);
@@ -414,7 +475,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = quit    r = rebirth universe    dynamically resizes to terminal",
+                "q / esc = quit    r = rebirth universe    every seed randomizes channels, rules, kernels, colors, and field behavior",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
