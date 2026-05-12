@@ -174,20 +174,24 @@ impl Bestiary {
 }
 
 fn promotion_reason(record: &RunRecord) -> Option<String> {
-    if record.score >= 0.72 {
+    if record.score >= 0.60 {
         return Some("high survival score".to_string());
     }
 
-    if record.motion_score >= 0.060 && record.entropy_score >= 0.300 && record.score >= 0.48 {
+    if record.motion_score >= 0.045 && record.entropy_score >= 0.280 && record.score >= 0.38 {
         return Some("mobile complex behavior".to_string());
     }
 
-    if record.entropy_score >= 0.520 && record.score >= 0.52 {
+    if record.entropy_score >= 0.460 && record.score >= 0.40 {
         return Some("high living complexity".to_string());
     }
 
-    if record.motion_score >= 0.110 && record.score >= 0.42 {
+    if record.motion_score >= 0.075 && record.score >= 0.32 {
         return Some("strong drift signature".to_string());
+    }
+
+    if record.channels >= 8 && record.entropy_score >= 0.380 && record.mass >= 0.055 {
+        return Some("multi-channel ecological bloom".to_string());
     }
 
     None
@@ -214,11 +218,19 @@ fn morphology(record: &RunRecord) -> String {
 }
 
 fn rarity(record: &RunRecord) -> String {
-    if record.score >= 0.84 || (record.motion_score >= 0.18 && record.entropy_score >= 0.55) {
+    if record.score >= 0.78
+        || (record.motion_score >= 0.120 && record.entropy_score >= 0.500)
+        || (record.channels >= 10 && record.entropy_score >= 0.620 && record.mass >= 0.080)
+    {
         "mythic".to_string()
-    } else if record.score >= 0.72 || record.motion_score >= 0.12 {
+    } else if record.score >= 0.620
+        || record.motion_score >= 0.085
+        || record.entropy_score >= 0.540
+        || (record.channels >= 8 && record.entropy_score >= 0.430 && record.mass >= 0.050)
+    {
         "rare".to_string()
-    } else if record.score >= 0.58 || record.entropy_score >= 0.42 {
+    } else if record.score >= 0.480 || record.entropy_score >= 0.340 || record.motion_score >= 0.045
+    {
         "uncommon".to_string()
     } else {
         "common".to_string()

@@ -280,6 +280,56 @@ impl GenomeVault {
         Ok(Some((parent_id, child)))
     }
 
+    pub fn mutated_current_snapshot(
+        &mut self,
+        snapshot: &GenomeSnapshot,
+    ) -> Result<GenomeSnapshot> {
+        let seed = unix_now()
+            ^ snapshot.seed
+            ^ snapshot.tick
+            ^ self.total_saved
+            ^ 0xC0DE_C0DE_A11F_EE17_u64;
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let strength = rng.gen_range(0.012..0.075);
+        let mut child = snapshot.clone();
+
+        child.version = 5;
+        child.genome_id = genome_id(seed, 0, self.total_saved + 1, "mutated_current");
+        child.parent_id = if snapshot.genome_id.is_empty() {
+            None
+        } else {
+            Some(snapshot.genome_id.clone())
+        };
+        child.co_parent_id = None;
+        child.generation = snapshot.generation.saturating_add(1);
+        child.branch_label = if snapshot.branch_label.is_empty() {
+            branch_label(snapshot.seed)
+        } else {
+            snapshot.branch_label.clone()
+        };
+        child.mutation_strength = strength;
+        child.seed = seed;
+        child.reason = "mutated_current".to_string();
+        child.tick = 0;
+        child.motion_score = 0.0;
+        child.entropy_score = 0.0;
+        child.mass = 0.0;
+        child.saved_at_unix = unix_now();
+
+        mutate_rules(&mut child, &mut rng, strength);
+
+        if child.cells.is_empty() {
+            return Ok(child);
+        }
+
+        for cell in &mut child.cells {
+            let drift = rng.gen_range(-strength..strength) * 0.42;
+            *cell = (*cell + drift).clamp(0.0, 1.0);
+        }
+
+        Ok(child)
+    }
     pub fn breed_best_two(&mut self) -> Result<Option<(String, String, GenomeSnapshot)>> {
         if self.entries.len() < 2 {
             return Ok(None);
@@ -605,17 +655,18 @@ fn normalize_taps(taps: &mut [KernelTapGenome]) {
 }
 
 fn score_entry(entry: &GenomeIndexEntry) -> f32 {
-    entry.motion_score * 0.45
-        + entry.entropy_score * 0.35
-        + entry.mass * 0.20
-        + entry.generation as f32 * 0.002
-        + if entry.co_parent_id.is_some() {
-            0.012
-        } else {
-            0.0
-        }
-}
+    let performance = entry.motion_score * 0.38 + entry.entropy_score * 0.34 + entry.mass * 0.18;
+    let lineage = entry.generation as f32 * 0.003;
+    let hybrid_bonus = if entry.co_parent_id.is_some() {
+        0.018
+    } else {
+        0.0
+    };
+    let body_bonus = if entry.has_body_snapshot { 0.006 } else { 0.0 };
+    let overuse_penalty = entry.times_loaded as f32 * 0.004 + entry.children_count as f32 * 0.002;
 
+    performance + lineage + hybrid_bonus + body_bonus - overuse_penalty
+}
 fn blend_f32(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }

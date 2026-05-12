@@ -1151,6 +1151,25 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "no saved genomes yet, press s to save one first".to_string();
                         }
                     },
+                    KeyCode::Char('m') => {
+                        let current = world.genome_snapshot("mutated_current_source");
+                        let child_snapshot = genome_vault.mutated_current_snapshot(&current)?;
+                        let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+
+                        world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+
+                        chronicle.save()?;
+                        bestiary.save()?;
+                        genome_vault.save()?;
+
+                        status_note = format!(
+                            "mutated current={}  {}  {}  {}",
+                            child_id,
+                            chronicle.status(),
+                            bestiary.status(),
+                            genome_vault.status()
+                        );
+                    }
                     KeyCode::Char('n') => match genome_vault.mutated_best_snapshot()? {
                         Some((parent_id, child_snapshot)) => {
                             let child_id = genome_vault.save_snapshot(&child_snapshot)?;
@@ -1490,7 +1509,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q quit | s save | r rebirth | l/L load | n mutate | b/B breed | g gpu/cpu    n = mutate best    b = breed best two    B = breed random two",
+                "q quit | s save | r rebirth | l/L load | m current mutate | n best mutate | b/B breed | g cpu/gpu",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
