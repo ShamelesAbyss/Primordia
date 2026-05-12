@@ -1,5 +1,6 @@
 mod bestiary;
 mod chronicle;
+mod genome;
 
 use anyhow::Result;
 use bestiary::Bestiary;
@@ -9,6 +10,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use genome::{GenomeSnapshot, GenomeVault, KernelTapGenome, RuleGenome};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use ratatui::{
     backend::CrosstermBackend,
@@ -509,6 +511,48 @@ impl World {
         (glyph, color)
     }
 
+    fn genome_snapshot(&self, reason: &str) -> GenomeSnapshot {
+        let mut rules = Vec::with_capacity(self.rules.len());
+
+        for rule in &self.rules {
+            let taps = rule
+                .taps
+                .iter()
+                .map(|tap| KernelTapGenome {
+                    dx: tap.dx,
+                    dy: tap.dy,
+                    weight: tap.weight,
+                })
+                .collect();
+
+            rules.push(RuleGenome {
+                from: rule.from,
+                to: rule.to,
+                mu: rule.mu,
+                sigma: rule.sigma,
+                weight: rule.weight,
+                taps,
+            });
+        }
+
+        GenomeSnapshot {
+            version: 1,
+            seed: self.seed,
+            saved_at_unix: unix_now(),
+            reason: reason.to_string(),
+            tick: self.tick,
+            field_w: self.w,
+            field_h: self.h,
+            channels: self.channels,
+            base_rules: self.base_rules,
+            kernel_radius: self.radius,
+            motion_score: self.motion_score,
+            entropy_score: self.entropy_score,
+            mass: self.mass(),
+            rules,
+        }
+    }
+
     fn chronicle_record(&self, reason: &str) -> RunRecord {
         let mut channel_masses = Vec::with_capacity(self.channels);
         for c in 0..self.channels {
@@ -641,6 +685,7 @@ fn main() -> Result<()> {
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut chronicle = Chronicle::load_or_new();
     let mut bestiary = Bestiary::load_or_new();
+    let mut genome_vault = GenomeVault::load_or_new();
     let mut world = World::new(88, 36, chronicle.suggest_bias());
 
     let sim_step = Duration::from_millis(16);
@@ -648,7 +693,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
     let mut last_sim_tick = Instant::now();
     let mut last_render = Instant::now();
-    let mut status_note = format!("{}  {}", chronicle.status(), bestiary.status());
+    let mut status_note = format!(
+        "{}  {}  {}",
+        chronicle.status(),
+        bestiary.status(),
+        genome_vault.status()
+    );
 
     loop {
         while event::poll(Duration::from_millis(1))? {
@@ -661,37 +711,66 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         let record = world.chronicle_record("quit_autosave");
                         chronicle.record(record.clone());
-                        let _ = bestiary.consider(&record)?;
+
+                        if bestiary.consider(&record)?.is_some() {
+                            let _ = genome_vault
+                                .save_snapshot(&world.genome_snapshot("bestiary_quit_autosave"))?;
+                        }
+
                         chronicle.save()?;
                         bestiary.save()?;
+                        genome_vault.save()?;
                         return Ok(());
                     }
                     KeyCode::Char('s') => {
                         let record = world.chronicle_record("manual_save");
                         chronicle.record(record.clone());
+
                         let discovery = bestiary.consider(&record)?;
+                        let genome_id =
+                            genome_vault.save_snapshot(&world.genome_snapshot("manual_save"))?;
+
                         chronicle.save()?;
                         bestiary.save()?;
+                        genome_vault.save()?;
 
                         status_note = if let Some(note) = discovery {
-                            note
+                            format!("{} genome={}", note, genome_id)
                         } else {
-                            format!("saved {}  {}", chronicle.status(), bestiary.status())
+                            format!(
+                                "saved genome={}  {}  {}  {}",
+                                genome_id,
+                                chronicle.status(),
+                                bestiary.status(),
+                                genome_vault.status()
+                            )
                         };
                     }
                     KeyCode::Char('r') => {
                         let record = world.chronicle_record("rebirth");
                         chronicle.record(record.clone());
+
                         let discovery = bestiary.consider(&record)?;
+                        if discovery.is_some() {
+                            let _ = genome_vault
+                                .save_snapshot(&world.genome_snapshot("bestiary_rebirth"))?;
+                        }
+
                         chronicle.save()?;
                         bestiary.save()?;
+                        genome_vault.save()?;
 
                         world = World::new(world.w, world.h, chronicle.suggest_bias());
 
                         status_note = if let Some(note) = discovery {
-                            note
+                            format!("{}  {}", note, genome_vault.status())
                         } else {
-                            format!("reborn {}  {}", chronicle.status(), bestiary.status())
+                            format!(
+                                "reborn {}  {}  {}",
+                                chronicle.status(),
+                                bestiary.status(),
+                                genome_vault.status()
+                            )
                         };
                     }
                     _ => {}
@@ -777,7 +856,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save chronicle    r = save + rebirth    key releases ignored",
+                "q / esc = save + quit    s = save genome    r = save + rebirth    genomes stay local",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
