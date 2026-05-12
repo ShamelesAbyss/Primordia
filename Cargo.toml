@@ -1,0 +1,11 @@
+[package]
+name = "primordia"
+version = "0.1.0"
+edition = "2021"
+description = "Infinite artificial life in Rust. A new universe emerges every launch."
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.27"
+ratatui = "0.26"
+rand = "0.8"
