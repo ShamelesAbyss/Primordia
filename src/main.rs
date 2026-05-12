@@ -394,7 +394,15 @@ fn main() -> Result<()> {
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut world = World::new(88, 36);
-    let mut last_tick = Instant::now();
+
+    // Simulation advances at ~60 updates/sec.
+    let sim_step = Duration::from_millis(16);
+
+    // Terminal redraws at ~30 FPS.
+    let render_step = Duration::from_millis(33);
+
+    let mut last_sim_tick = Instant::now();
+    let mut last_render = Instant::now();
 
     loop {
         while event::poll(Duration::from_millis(1))? {
@@ -407,16 +415,29 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             }
         }
 
-        if last_tick.elapsed() >= Duration::from_millis(16) {
+        // Advance the simulation independently of rendering.
+        let mut catchup = 0;
+        while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
             world.step();
-            last_tick = Instant::now();
+            last_sim_tick += sim_step;
+            catchup += 1;
         }
+
+        // Skip drawing until the next render interval.
+        if last_render.elapsed() < render_step {
+            continue;
+        }
+        last_render = Instant::now();
 
         terminal.draw(|frame| {
             let area = frame.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(7), Constraint::Min(10), Constraint::Length(3)])
+                .constraints([
+                    Constraint::Length(7),
+                    Constraint::Min(10),
+                    Constraint::Length(3),
+                ])
                 .split(area);
 
             let canvas_w = chunks[1].width.saturating_sub(2) as usize;
@@ -465,7 +486,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 let mut spans = Vec::with_capacity(world.w);
                 for x in 0..world.w {
                     let (glyph, color) = world.cell_visual(x, y);
-                    spans.push(Span::styled(glyph, Style::default().fg(color)));
+                    spans.push(Span::styled(
+                        glyph,
+                        Style::default().fg(color),
+                    ));
                 }
                 lines.push(Line::from(spans));
             }
@@ -475,7 +499,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = quit    r = rebirth universe    every seed randomizes channels, rules, kernels, colors, and field behavior",
+                "q / esc = quit    r = rebirth universe    60 simulation ticks/sec, ~30 FPS rendering",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
