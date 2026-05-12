@@ -1,6 +1,8 @@
+mod bestiary;
 mod chronicle;
 
 use anyhow::Result;
+use bestiary::Bestiary;
 use chronicle::{unix_now, Chronicle, ChronicleBias, RunRecord};
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -602,6 +604,7 @@ fn main() -> Result<()> {
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut chronicle = Chronicle::load_or_new();
+    let mut bestiary = Bestiary::load_or_new();
     let mut world = World::new(88, 36, chronicle.suggest_bias());
 
     let sim_step = Duration::from_millis(16);
@@ -609,27 +612,47 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
     let mut last_sim_tick = Instant::now();
     let mut last_render = Instant::now();
-    let mut status_note = chronicle.status();
+    let mut status_note = format!("{}  {}", chronicle.status(), bestiary.status());
 
     loop {
         while event::poll(Duration::from_millis(1))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => {
-                        chronicle.record(world.chronicle_record("quit_autosave"));
+                        let record = world.chronicle_record("quit_autosave");
+                        chronicle.record(record.clone());
+                        if let Some(_note) = bestiary.consider(&record)? {}
                         chronicle.save()?;
+                        bestiary.save()?;
                         return Ok(());
                     }
                     KeyCode::Char('s') => {
-                        chronicle.record(world.chronicle_record("manual_save"));
+                        let record = world.chronicle_record("manual_save");
+                        chronicle.record(record.clone());
+                        let discovery = bestiary.consider(&record)?;
                         chronicle.save()?;
-                        status_note = format!("saved {}", chronicle.status());
+                        bestiary.save()?;
+
+                        status_note = if let Some(note) = discovery {
+                            note
+                        } else {
+                            format!("saved {}  {}", chronicle.status(), bestiary.status())
+                        };
                     }
                     KeyCode::Char('r') => {
-                        chronicle.record(world.chronicle_record("rebirth"));
+                        let record = world.chronicle_record("rebirth");
+                        chronicle.record(record.clone());
+                        let discovery = bestiary.consider(&record)?;
                         chronicle.save()?;
+                        bestiary.save()?;
+
                         world = World::new(world.w, world.h, chronicle.suggest_bias());
-                        status_note = format!("reborn {}", chronicle.status());
+
+                        status_note = if let Some(note) = discovery {
+                            note
+                        } else {
+                            format!("reborn {}  {}", chronicle.status(), bestiary.status())
+                        };
                     }
                     _ => {}
                 }
@@ -713,9 +736,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 .block(Block::default().borders(Borders::ALL).title("Living Field"));
             frame.render_widget(canvas, chunks[1]);
 
-            let footer =
-                Paragraph::new("q / esc = save + quit    s = save chronicle    r = save + rebirth")
-                    .block(Block::default().borders(Borders::ALL).title("Controls"));
+            let footer = Paragraph::new(
+                "q / esc = save + quit    s = save chronicle    r = save + rebirth    bestiary auto-promotes strong worlds",
+            )
+            .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
         })?;
     }
