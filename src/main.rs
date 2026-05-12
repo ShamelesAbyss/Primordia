@@ -695,24 +695,36 @@ impl World {
     }
 
     fn channel_name(c: usize) -> &'static str {
-        match c {
+        match c % 12 {
             0 => "cyan",
             1 => "green",
             2 => "magenta",
             3 => "red",
             4 => "blue",
-            _ => "yellow",
+            5 => "gold",
+            6 => "violet",
+            7 => "orange",
+            8 => "teal",
+            9 => "lime",
+            10 => "pink",
+            _ => "white",
         }
     }
 
     fn channel_color(c: usize) -> Color {
-        match c {
+        match c % 12 {
             0 => Color::Cyan,
             1 => Color::Green,
             2 => Color::Magenta,
             3 => Color::Red,
             4 => Color::Blue,
-            _ => Color::Yellow,
+            5 => Color::Yellow,
+            6 => Color::Rgb(170, 90, 255),
+            7 => Color::Rgb(255, 140, 40),
+            8 => Color::Rgb(0, 220, 180),
+            9 => Color::LightGreen,
+            10 => Color::LightMagenta,
+            _ => Color::White,
         }
     }
 
