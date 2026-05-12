@@ -238,6 +238,93 @@ impl GpuEngine {
 
         Ok(())
     }
+    #[allow(dead_code)]
+    pub fn run_one_step_readback(&self, cells: &[f32]) -> Result<Vec<f32>, String> {
+        if cells.len() != self.len {
+            return Err(format!(
+                "cell length mismatch: got {}, expected {}",
+                cells.len(),
+                self.len
+            ));
+        }
+
+        let params = [self.width, self.height, self.channels, self.len as u32];
+        let byte_size = (self.len * std::mem::size_of::<f32>()) as u64;
+
+        self.queue
+            .write_buffer(&self.cells_buffer, 0, bytemuck::cast_slice(cells));
+        self.queue
+            .write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&params));
+
+        let readback_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia GPU Readback Buffer"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Primordia GPU Readback Bind Group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.cells_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.next_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Primordia GPU Readback Encoder"),
+            });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Primordia GPU Readback Compute Pass"),
+                timestamp_writes: None,
+            });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+        }
+
+        encoder.copy_buffer_to_buffer(&self.next_buffer, 0, &readback_buffer, 0, byte_size);
+
+        self.queue.submit(Some(encoder.finish()));
+
+        let slice = readback_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+
+        self.device.poll(wgpu::Maintain::Wait);
+
+        receiver
+            .recv()
+            .map_err(|err| format!("GPU readback receive failed: {err:?}"))?
+            .map_err(|err| format!("GPU readback map failed: {err:?}"))?;
+
+        let mapped = slice.get_mapped_range();
+        let values = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
+
+        drop(mapped);
+        readback_buffer.unmap();
+
+        Ok(values)
+    }
 }
 
 #[cfg(feature = "gpu")]
