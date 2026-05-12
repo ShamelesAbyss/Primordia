@@ -38,6 +38,8 @@ pub struct GenomeSnapshot {
     #[serde(default)]
     pub parent_id: Option<String>,
     #[serde(default)]
+    pub co_parent_id: Option<String>,
+    #[serde(default)]
     pub generation: u32,
     #[serde(default)]
     pub branch_label: String,
@@ -79,6 +81,8 @@ pub struct GenomeIndexEntry {
     #[serde(default)]
     pub parent_id: Option<String>,
     #[serde(default)]
+    pub co_parent_id: Option<String>,
+    #[serde(default)]
     pub generation: u32,
     #[serde(default)]
     pub branch_label: String,
@@ -103,7 +107,7 @@ impl GenomeVault {
     pub fn load_or_new() -> Self {
         if let Ok(data) = std::fs::read_to_string(GENOME_INDEX) {
             if let Ok(mut vault) = serde_json::from_str::<GenomeVault>(&data) {
-                vault.version = 4;
+                vault.version = 5;
                 for entry in &mut vault.entries {
                     if entry.branch_label.is_empty() {
                         entry.branch_label = branch_label(entry.seed);
@@ -115,7 +119,7 @@ impl GenomeVault {
 
         let now = unix_now();
         Self {
-            version: 4,
+            version: 5,
             created_at_unix: now,
             updated_at_unix: now,
             total_saved: 0,
@@ -138,7 +142,7 @@ impl GenomeVault {
         };
 
         let mut snapshot = snapshot.clone();
-        snapshot.version = 4;
+        snapshot.version = 5;
         snapshot.genome_id = id.clone();
         snapshot.saved_at_unix = unix_now();
 
@@ -151,7 +155,10 @@ impl GenomeVault {
         let mut file = File::create(&path)?;
         file.write_all(json.as_bytes())?;
 
-        if let Some(parent_id) = &snapshot.parent_id {
+        for parent_id in [snapshot.parent_id.as_ref(), snapshot.co_parent_id.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             if let Some(parent) = self.entries.iter_mut().find(|entry| &entry.id == parent_id) {
                 parent.children_count = parent.children_count.saturating_add(1);
             }
@@ -168,6 +175,7 @@ impl GenomeVault {
             existing.mass = snapshot.mass;
             existing.has_body_snapshot = !snapshot.cells.is_empty();
             existing.parent_id = snapshot.parent_id.clone();
+            existing.co_parent_id = snapshot.co_parent_id.clone();
             existing.generation = snapshot.generation;
             existing.branch_label = snapshot.branch_label.clone();
             existing.mutation_strength = snapshot.mutation_strength;
@@ -185,6 +193,7 @@ impl GenomeVault {
                 mass: snapshot.mass,
                 has_body_snapshot: !snapshot.cells.is_empty(),
                 parent_id: snapshot.parent_id.clone(),
+                co_parent_id: snapshot.co_parent_id.clone(),
                 generation: snapshot.generation,
                 branch_label: snapshot.branch_label.clone(),
                 mutation_strength: snapshot.mutation_strength,
@@ -238,9 +247,10 @@ impl GenomeVault {
         let strength = rng.gen_range(0.015..0.085);
         let mut child = parent.clone();
 
-        child.version = 4;
+        child.version = 5;
         child.genome_id = genome_id(seed, 0, self.total_saved + 1, "mutated_offspring");
         child.parent_id = Some(parent_id.clone());
+        child.co_parent_id = None;
         child.generation = parent.generation.saturating_add(1);
         child.branch_label = if parent.branch_label.is_empty() {
             branch_label(parent.seed)
@@ -270,6 +280,61 @@ impl GenomeVault {
         Ok(Some((parent_id, child)))
     }
 
+    pub fn breed_best_two(&mut self) -> Result<Option<(String, String, GenomeSnapshot)>> {
+        if self.entries.len() < 2 {
+            return Ok(None);
+        }
+
+        let Some((id_a, parent_a)) = self.load_snapshot_by_index(0)? else {
+            return Ok(None);
+        };
+        let Some((id_b, parent_b)) = self.load_snapshot_by_index(1)? else {
+            return Ok(None);
+        };
+
+        let child = breed_snapshots(
+            &id_a,
+            &parent_a,
+            &id_b,
+            &parent_b,
+            self.total_saved + 1,
+            false,
+        );
+        Ok(Some((id_a, id_b, child)))
+    }
+
+    pub fn breed_random_two(&mut self) -> Result<Option<(String, String, GenomeSnapshot)>> {
+        if self.entries.len() < 2 {
+            return Ok(None);
+        }
+
+        let seed = unix_now() ^ self.total_saved ^ 0xBEE5_B1EED;
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let a = rng.gen_range(0..self.entries.len());
+        let mut b = rng.gen_range(0..self.entries.len());
+        while b == a {
+            b = rng.gen_range(0..self.entries.len());
+        }
+
+        let Some((id_a, parent_a)) = self.load_snapshot_by_index(a)? else {
+            return Ok(None);
+        };
+        let Some((id_b, parent_b)) = self.load_snapshot_by_index(b)? else {
+            return Ok(None);
+        };
+
+        let child = breed_snapshots(
+            &id_a,
+            &parent_a,
+            &id_b,
+            &parent_b,
+            self.total_saved + 1,
+            true,
+        );
+        Ok(Some((id_a, id_b, child)))
+    }
+
     fn load_snapshot_by_index(&mut self, index: usize) -> Result<Option<(String, GenomeSnapshot)>> {
         let Some(entry) = self.entries.get_mut(index) else {
             return Ok(None);
@@ -281,7 +346,7 @@ impl GenomeVault {
         let path = format!("{}/{}.json", GENOME_DIR, id);
         let data = std::fs::read_to_string(path)?;
         let mut snapshot = serde_json::from_str::<GenomeSnapshot>(&data)?;
-        snapshot.version = snapshot.version.max(4);
+        snapshot.version = snapshot.version.max(5);
 
         if snapshot.genome_id.is_empty() {
             snapshot.genome_id = id.clone();
@@ -321,13 +386,179 @@ impl GenomeVault {
             .max()
             .unwrap_or(0);
 
+        let hybrid_count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.co_parent_id.is_some())
+            .count();
+
         format!(
-            "genomes={} bodies={} max_gen={}",
+            "genomes={} bodies={} hybrids={} max_gen={}",
             self.entries.len(),
             body_count,
+            hybrid_count,
             max_generation
         )
     }
+}
+
+fn breed_snapshots(
+    id_a: &str,
+    parent_a: &GenomeSnapshot,
+    id_b: &str,
+    parent_b: &GenomeSnapshot,
+    count: u64,
+    random_pair: bool,
+) -> GenomeSnapshot {
+    let seed = unix_now()
+        ^ parent_a.seed.rotate_left(13)
+        ^ parent_b.seed.rotate_right(7)
+        ^ count
+        ^ if random_pair {
+            0xBADC_0FFEE
+        } else {
+            0xE117_EC7E
+        };
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let strength = rng.gen_range(0.018..0.095);
+
+    let channels = parent_a.channels.max(parent_b.channels).clamp(3, 6);
+    let base_rules = ((parent_a.base_rules + parent_b.base_rules) / 2).clamp(4, 12);
+    let kernel_radius = ((parent_a.kernel_radius + parent_b.kernel_radius) / 2).clamp(4, 7);
+
+    let mut rules = Vec::new();
+    let max_rules = parent_a.rules.len().max(parent_b.rules.len()).clamp(4, 24);
+
+    for i in 0..max_rules {
+        let source = match (parent_a.rules.get(i), parent_b.rules.get(i)) {
+            (Some(a), Some(b)) => {
+                if rng.gen_bool(0.45) {
+                    blend_rule(a, b, channels, &mut rng, strength)
+                } else if rng.gen_bool(0.5) {
+                    clone_rule_for_channels(a, channels)
+                } else {
+                    clone_rule_for_channels(b, channels)
+                }
+            }
+            (Some(a), None) => clone_rule_for_channels(a, channels),
+            (None, Some(b)) => clone_rule_for_channels(b, channels),
+            (None, None) => continue,
+        };
+
+        rules.push(source);
+    }
+
+    if rules.is_empty() {
+        rules.extend(
+            parent_a
+                .rules
+                .iter()
+                .map(|rule| clone_rule_for_channels(rule, channels)),
+        );
+    }
+
+    let branch_label = hybrid_branch_label(parent_a, parent_b);
+    let generation = parent_a
+        .generation
+        .max(parent_b.generation)
+        .saturating_add(1);
+
+    let mut child = GenomeSnapshot {
+        version: 5,
+        genome_id: genome_id(
+            seed,
+            0,
+            count,
+            if random_pair {
+                "random_hybrid"
+            } else {
+                "elite_hybrid"
+            },
+        ),
+        parent_id: Some(id_a.to_string()),
+        co_parent_id: Some(id_b.to_string()),
+        generation,
+        branch_label,
+        mutation_strength: strength,
+        seed,
+        saved_at_unix: unix_now(),
+        reason: if random_pair {
+            "random_hybrid".to_string()
+        } else {
+            "elite_hybrid".to_string()
+        },
+        tick: 0,
+        field_w: parent_a.field_w.max(parent_b.field_w),
+        field_h: parent_a.field_h.max(parent_b.field_h),
+        channels,
+        base_rules,
+        kernel_radius,
+        motion_score: 0.0,
+        entropy_score: 0.0,
+        mass: 0.0,
+        rules,
+        cells: Vec::new(),
+    };
+
+    mutate_rules(&mut child, &mut rng, strength * 0.75);
+    child
+}
+
+fn blend_rule(
+    a: &RuleGenome,
+    b: &RuleGenome,
+    channels: usize,
+    rng: &mut StdRng,
+    strength: f32,
+) -> RuleGenome {
+    let mut taps = if rng.gen_bool(0.5) {
+        a.taps.clone()
+    } else {
+        b.taps.clone()
+    };
+
+    if !a.taps.is_empty() && !b.taps.is_empty() && rng.gen_bool(0.35) {
+        taps.clear();
+        let max_len = a.taps.len().max(b.taps.len()).min(96);
+        for i in 0..max_len {
+            match (a.taps.get(i), b.taps.get(i)) {
+                (Some(ta), Some(tb)) => {
+                    taps.push(KernelTapGenome {
+                        dx: if rng.gen_bool(0.5) { ta.dx } else { tb.dx },
+                        dy: if rng.gen_bool(0.5) { ta.dy } else { tb.dy },
+                        weight: blend_f32(ta.weight, tb.weight, rng.gen_range(0.35..0.65)),
+                    });
+                }
+                (Some(ta), None) => taps.push(ta.clone()),
+                (None, Some(tb)) => taps.push(tb.clone()),
+                (None, None) => {}
+            }
+        }
+    }
+
+    for tap in &mut taps {
+        if rng.gen_bool(0.20) {
+            tap.weight = (tap.weight + rng.gen_range(-strength..strength) * 0.12).max(0.0);
+        }
+    }
+    normalize_taps(&mut taps);
+
+    RuleGenome {
+        from: if rng.gen_bool(0.5) { a.from } else { b.from }.min(channels - 1),
+        to: if rng.gen_bool(0.5) { a.to } else { b.to }.min(channels - 1),
+        mu: blend_f32(a.mu, b.mu, rng.gen_range(0.35..0.65)).clamp(0.08, 0.55),
+        sigma: blend_f32(a.sigma, b.sigma, rng.gen_range(0.35..0.65)).clamp(0.012, 0.140),
+        weight: blend_f32(a.weight, b.weight, rng.gen_range(0.35..0.65)).clamp(-0.85, 0.85),
+        taps,
+    }
+}
+
+fn clone_rule_for_channels(rule: &RuleGenome, channels: usize) -> RuleGenome {
+    let mut cloned = rule.clone();
+    cloned.from = cloned.from.min(channels - 1);
+    cloned.to = cloned.to.min(channels - 1);
+    cloned
 }
 
 fn mutate_rules(snapshot: &mut GenomeSnapshot, rng: &mut StdRng, strength: f32) {
@@ -350,14 +581,8 @@ fn mutate_rules(snapshot: &mut GenomeSnapshot, rng: &mut StdRng, strength: f32) 
         snapshot.rules.remove(remove_at);
     }
 
-    if rng.gen_bool((strength * 1.9).clamp(0.02, 0.22) as f64) {
-        let Some(template) = snapshot
-            .rules
-            .get(rng.gen_range(0..snapshot.rules.len()))
-            .cloned()
-        else {
-            return;
-        };
+    if rng.gen_bool((strength * 1.9).clamp(0.02, 0.22) as f64) && !snapshot.rules.is_empty() {
+        let template = snapshot.rules[rng.gen_range(0..snapshot.rules.len())].clone();
 
         let mut new_rule = template;
         new_rule.from = rng.gen_range(0..snapshot.channels);
@@ -384,6 +609,15 @@ fn score_entry(entry: &GenomeIndexEntry) -> f32 {
         + entry.entropy_score * 0.35
         + entry.mass * 0.20
         + entry.generation as f32 * 0.002
+        + if entry.co_parent_id.is_some() {
+            0.012
+        } else {
+            0.0
+        }
+}
+
+fn blend_f32(a: f32, b: f32, t: f32) -> f32 {
+    a * (1.0 - t) + b * t
 }
 
 fn branch_label(seed: u64) -> String {
@@ -393,6 +627,26 @@ fn branch_label(seed: u64) -> String {
     ];
 
     names[(seed as usize) % names.len()].to_string()
+}
+
+fn hybrid_branch_label(a: &GenomeSnapshot, b: &GenomeSnapshot) -> String {
+    let left = if a.branch_label.is_empty() {
+        branch_label(a.seed)
+    } else {
+        a.branch_label.clone()
+    };
+
+    let right = if b.branch_label.is_empty() {
+        branch_label(b.seed)
+    } else {
+        b.branch_label.clone()
+    };
+
+    if left == right {
+        format!("{} Hybrid", left)
+    } else {
+        format!("{}-{} Hybrid", left, right)
+    }
 }
 
 fn genome_id(seed: u64, tick: u64, count: u64, reason: &str) -> String {

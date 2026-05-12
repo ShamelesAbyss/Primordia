@@ -609,6 +609,7 @@ impl World {
             version: 4,
             genome_id: String::new(),
             parent_id: None,
+            co_parent_id: None,
             generation: 0,
             branch_label: String::new(),
             mutation_strength: 0.0,
@@ -902,6 +903,50 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "no genome available to mutate yet, press s first".to_string();
                         }
                     },
+                    KeyCode::Char('b') => match genome_vault.breed_best_two()? {
+                        Some((parent_a, parent_b, child_snapshot)) => {
+                            let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+                            world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+
+                            chronicle.save()?;
+                            bestiary.save()?;
+                            genome_vault.save()?;
+
+                            status_note = format!(
+                                "bred elite hybrid={} parents={} + {} {}",
+                                child_id,
+                                parent_a,
+                                parent_b,
+                                genome_vault.status()
+                            );
+                        }
+                        None => {
+                            status_note =
+                                "need at least two saved genomes before breeding".to_string();
+                        }
+                    },
+                    KeyCode::Char('B') => match genome_vault.breed_random_two()? {
+                        Some((parent_a, parent_b, child_snapshot)) => {
+                            let child_id = genome_vault.save_snapshot(&child_snapshot)?;
+                            world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+
+                            chronicle.save()?;
+                            bestiary.save()?;
+                            genome_vault.save()?;
+
+                            status_note = format!(
+                                "bred random hybrid={} parents={} + {} {}",
+                                child_id,
+                                parent_a,
+                                parent_b,
+                                genome_vault.status()
+                            );
+                        }
+                        None => {
+                            status_note =
+                                "need at least two saved genomes before breeding".to_string();
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -985,7 +1030,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best genome",
+                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best    b = breed best two    B = breed random two",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
