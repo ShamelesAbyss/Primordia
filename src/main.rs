@@ -1,6 +1,7 @@
 mod bestiary;
 mod chronicle;
 mod genome;
+mod gpu;
 
 use anyhow::Result;
 use bestiary::Bestiary;
@@ -11,6 +12,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use genome::{GenomeSnapshot, GenomeVault, KernelTapGenome, RuleGenome};
+use gpu::GpuStatus;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use ratatui::{
     backend::CrosstermBackend,
@@ -1011,6 +1013,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut chronicle = Chronicle::load_or_new();
     let mut bestiary = Bestiary::load_or_new();
     let mut genome_vault = GenomeVault::load_or_new();
+    let _gpu_status: GpuStatus = gpu::probe_gpu();
     let mut world = World::new(88, 36, chronicle.suggest_bias());
 
     let sim_step = Duration::from_millis(16);
@@ -1022,7 +1025,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         "{}  {}  {}",
         chronicle.status(),
         bestiary.status(),
-        genome_vault.status()
+        genome_vault.status(),
     );
     let mut extinction_ticks: u64 = 0;
     let extinction_threshold: u64 = 1000;
@@ -1070,7 +1073,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 genome_id,
                                 chronicle.status(),
                                 bestiary.status(),
-                                genome_vault.status()
+                                genome_vault.status(),
                             )
                         };
                     }
@@ -1097,7 +1100,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "reborn {}  {}  {}",
                                 chronicle.status(),
                                 bestiary.status(),
-                                genome_vault.status()
+                                genome_vault.status(),
                             )
                         };
                     }
@@ -1109,7 +1112,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 genome_id,
                                 chronicle.status(),
                                 bestiary.status(),
-                                genome_vault.status()
+                                genome_vault.status(),
                             );
                         }
                         None => {
@@ -1125,7 +1128,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 genome_id,
                                 chronicle.status(),
                                 bestiary.status(),
-                                genome_vault.status()
+                                genome_vault.status(),
                             );
                         }
                         None => {
@@ -1146,7 +1149,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "spawned mutation={} parent={} {}",
                                 child_id,
                                 parent_id,
-                                genome_vault.status()
+                                genome_vault.status(),
                             );
                         }
                         None => {
@@ -1168,7 +1171,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 child_id,
                                 parent_a,
                                 parent_b,
-                                genome_vault.status()
+                                genome_vault.status(),
                             );
                         }
                         None => {
@@ -1190,7 +1193,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 child_id,
                                 parent_a,
                                 parent_b,
-                                genome_vault.status()
+                                genome_vault.status(),
                             );
                         }
                         None => {
@@ -1272,7 +1275,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         extinction_rebirths,
                         recovery_cause,
                         note,
-                        genome_vault.status()
+                        genome_vault.status(),
                     )
                 } else {
                     format!(
@@ -1282,7 +1285,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         chronicle.total_runs_recorded,
                         chronicle.status(),
                         bestiary.status(),
-                        genome_vault.status()
+                        genome_vault.status(),
                     )
                 };
             }

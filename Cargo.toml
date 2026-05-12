@@ -4,11 +4,19 @@ version = "0.1.0"
 edition = "2021"
 description = "Infinite artificial life in Rust. A new universe emerges every launch."
 
+[features]
+default = ["cpu"]
+cpu = []
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
 [dependencies]
 anyhow = "1"
 crossterm = "0.27"
 rand = "0.8"
 ratatui = "0.26"
+rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rayon = "1.10"
+wgpu = { version = "24", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
