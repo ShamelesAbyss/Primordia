@@ -1201,6 +1201,30 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "need at least two saved genomes before breeding".to_string();
                         }
                     },
+                    KeyCode::Char('G') => {
+                        #[cfg(feature = "gpu")]
+                        {
+                            match gpu::real_world_bridge_test(
+                                world.w as u32,
+                                world.h as u32,
+                                world.channels as u32,
+                                &world.cells,
+                            ) {
+                                Ok(note) => {
+                                    status_note = format!("GPU BRIDGE OK: {}", note);
+                                }
+                                Err(err) => {
+                                    status_note = format!("GPU BRIDGE FAILED: {}", err);
+                                }
+                            }
+                        }
+
+                        #[cfg(not(feature = "gpu"))]
+                        {
+                            status_note =
+                                "GPU bridge unavailable, build with --features gpu".to_string();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1364,7 +1388,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best    b = breed best two    B = breed random two",
+                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best    b = breed best two    B = breed random two    G = GPU bridge test",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
