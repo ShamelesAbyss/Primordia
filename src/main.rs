@@ -69,6 +69,108 @@ struct World {
     entropy_score: f32,
 }
 
+#[derive(Clone, Copy)]
+enum KernelArchetype {
+    Orbium,
+    Manta,
+    Medusa,
+    Reef,
+    Spiral,
+    Predator,
+}
+
+impl KernelArchetype {
+    fn random(rng: &mut StdRng) -> Self {
+        match rng.gen_range(0..6) {
+            0 => Self::Orbium,
+            1 => Self::Manta,
+            2 => Self::Medusa,
+            3 => Self::Reef,
+            4 => Self::Spiral,
+            _ => Self::Predator,
+        }
+    }
+
+    fn shape(&self, rng: &mut StdRng) -> (usize, f32, f32, f32, f32, f32) {
+        match self {
+            Self::Orbium => (
+                rng.gen_range(2..5),
+                rng.gen_range(0.02..0.12),
+                rng.gen_range(0.03..0.08),
+                rng.gen_range(0.00..0.16),
+                rng.gen_range(0.00..0.08),
+                1.0,
+            ),
+            Self::Manta => (
+                rng.gen_range(3..6),
+                rng.gen_range(0.08..0.28),
+                rng.gen_range(0.035..0.095),
+                rng.gen_range(0.18..0.46),
+                rng.gen_range(0.00..0.12),
+                2.0,
+            ),
+            Self::Medusa => (
+                rng.gen_range(2..5),
+                rng.gen_range(0.00..0.18),
+                rng.gen_range(0.065..0.140),
+                rng.gen_range(0.04..0.24),
+                rng.gen_range(0.00..0.10),
+                1.0,
+            ),
+            Self::Reef => (
+                rng.gen_range(3..6),
+                rng.gen_range(0.00..0.10),
+                rng.gen_range(0.030..0.075),
+                rng.gen_range(0.00..0.12),
+                rng.gen_range(0.02..0.18),
+                3.0,
+            ),
+            Self::Spiral => (
+                rng.gen_range(3..6),
+                rng.gen_range(0.06..0.24),
+                rng.gen_range(0.035..0.090),
+                rng.gen_range(0.22..0.55),
+                rng.gen_range(0.02..0.16),
+                rng.gen_range(3.0..6.0),
+            ),
+            Self::Predator => (
+                rng.gen_range(2..5),
+                rng.gen_range(0.10..0.34),
+                rng.gen_range(0.022..0.060),
+                rng.gen_range(0.16..0.42),
+                rng.gen_range(0.04..0.22),
+                rng.gen_range(2.0..5.0),
+            ),
+        }
+    }
+
+    fn ring_weight(&self, ring: usize, rng: &mut StdRng) -> f32 {
+        match self {
+            Self::Orbium => rng.gen_range(0.18..1.00),
+            Self::Manta => {
+                let sign = if ring % 3 == 1 { -1.0 } else { 1.0 };
+                sign * rng.gen_range(0.20..1.10)
+            }
+            Self::Medusa => {
+                let falloff = 1.0 / (ring as f32 + 1.0).sqrt();
+                rng.gen_range(0.25..1.15) * falloff
+            }
+            Self::Reef => {
+                let sign = if ring % 2 == 0 { 1.0 } else { -0.45 };
+                sign * rng.gen_range(0.25..0.95)
+            }
+            Self::Spiral => {
+                let sign = if ring % 2 == 0 { 1.0 } else { -1.0 };
+                sign * rng.gen_range(0.25..1.20)
+            }
+            Self::Predator => {
+                let sign = if ring == 0 { -1.0 } else { 1.0 };
+                sign * rng.gen_range(0.35..1.35)
+            }
+        }
+    }
+}
+
 impl Rule {
     fn random(
         rng: &mut StdRng,
@@ -78,17 +180,16 @@ impl Rule {
     ) -> Self {
         let from = rng.gen_range(0..channels);
         let to = rng.gen_range(0..channels);
+        let archetype = KernelArchetype::random(rng);
+        let (ring_count, center_jitter, base_width, asymmetry, noise_mix, angular_lobes) =
+            archetype.shape(rng);
 
-        let ring_count = rng.gen_range(2..6);
-        let angular_lobes = rng.gen_range(1..5) as f32;
         let phase = rng.gen_range(0.0..std::f32::consts::TAU);
-        let asymmetry = rng.gen_range(0.00..0.38);
-        let noise_mix = rng.gen_range(0.00..0.18);
+        let swirl = rng.gen_range(-1.0..1.0);
 
         let mut ring_weights = Vec::with_capacity(ring_count);
-        for i in 0..ring_count {
-            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-            ring_weights.push(sign * rng.gen_range(0.20..1.00));
+        for ring in 0..ring_count {
+            ring_weights.push(archetype.ring_weight(ring, rng));
         }
 
         let mut taps = Vec::new();
@@ -111,18 +212,28 @@ impl Rule {
                 let mut weight = 0.0;
 
                 for ring in 0..ring_count {
-                    let center = (ring as f32 + 0.55) / ring_count as f32;
-                    let width = rng.gen_range(0.035..0.105);
+                    let center = ((ring as f32 + 0.55) / ring_count as f32)
+                        + rng.gen_range(-center_jitter..center_jitter);
+                    let width = (base_width * rng.gen_range(0.72..1.34)).max(0.012);
                     let shell = (-((dist - center).powi(2)) / (2.0 * width * width)).exp();
 
-                    let angular_wave =
-                        1.0 + asymmetry * ((angle * angular_lobes + phase + ring as f32).cos());
+                    let angular_wave = 1.0
+                        + asymmetry * ((angle * angular_lobes + phase + ring as f32 * swirl).cos());
 
-                    weight += shell * ring_weights[ring] * angular_wave;
+                    let directional_bias = match archetype {
+                        KernelArchetype::Manta => 1.0 + asymmetry * 0.65 * angle.cos(),
+                        KernelArchetype::Spiral => {
+                            1.0 + asymmetry * 0.45 * (angle + dist * 6.0).sin()
+                        }
+                        KernelArchetype::Predator => 1.0 + asymmetry * 0.55 * (angle * 2.0).cos(),
+                        _ => 1.0,
+                    };
+
+                    weight += shell * ring_weights[ring] * angular_wave * directional_bias;
                 }
 
                 if rng.gen_bool(noise_mix as f64) {
-                    weight += rng.gen_range(-0.18..0.18);
+                    weight += rng.gen_range(-0.20..0.20);
                 }
 
                 if weight.abs() > 0.0001 {
@@ -140,6 +251,31 @@ impl Rule {
         let mut sigma = rng.gen_range(0.022..0.095);
         let mut weight = rng.gen_range(-0.46..0.60);
 
+        match archetype {
+            KernelArchetype::Orbium => {
+                sigma *= rng.gen_range(0.85..1.10);
+            }
+            KernelArchetype::Manta => {
+                mu *= rng.gen_range(0.82..1.05);
+                weight += rng.gen_range(0.02..0.12);
+            }
+            KernelArchetype::Medusa => {
+                sigma *= rng.gen_range(1.05..1.35);
+                weight *= rng.gen_range(0.78..1.05);
+            }
+            KernelArchetype::Reef => {
+                weight *= rng.gen_range(0.65..0.95);
+            }
+            KernelArchetype::Spiral => {
+                mu *= rng.gen_range(0.90..1.18);
+                sigma *= rng.gen_range(0.85..1.18);
+            }
+            KernelArchetype::Predator => {
+                weight += rng.gen_range(-0.16..0.08);
+                sigma *= rng.gen_range(0.70..0.98);
+            }
+        }
+
         if let Some(memory) = bias {
             if rng.gen_bool(memory.strength as f64) {
                 mu = blend(mu, memory.target_mu, memory.strength).clamp(0.12, 0.46);
@@ -151,9 +287,9 @@ impl Rule {
         Self {
             from,
             to,
-            mu,
-            sigma,
-            weight,
+            mu: mu.clamp(0.08, 0.55),
+            sigma: sigma.clamp(0.012, 0.140),
+            weight: weight.clamp(-0.85, 0.85),
             taps,
         }
     }
