@@ -14,10 +14,15 @@ const MAX_ENTRIES: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BestiaryEntry {
+    pub version: u32,
     pub id: String,
     pub species_name: String,
     pub discovered_at_unix: u64,
+    pub discovery_rank: u64,
     pub promotion_reason: String,
+    pub morphology: String,
+    pub rarity: String,
+    pub tags: Vec<String>,
     pub record: RunRecord,
 }
 
@@ -29,9 +34,13 @@ pub struct BestiaryIndexEntry {
     pub score: f32,
     pub motion_score: f32,
     pub entropy_score: f32,
+    pub mass: f32,
     pub channels: usize,
     pub rules: usize,
     pub kernel_radius: i32,
+    pub morphology: String,
+    pub rarity: String,
+    pub tags: Vec<String>,
     pub discovered_at_unix: u64,
 }
 
@@ -49,7 +58,8 @@ impl Bestiary {
         if let Ok(mut file) = File::open(BESTIARY_INDEX) {
             let mut data = String::new();
             if file.read_to_string(&mut data).is_ok() {
-                if let Ok(index) = serde_json::from_str::<Bestiary>(&data) {
+                if let Ok(mut index) = serde_json::from_str::<Bestiary>(&data) {
+                    index.version = 2;
                     return index;
                 }
             }
@@ -57,7 +67,7 @@ impl Bestiary {
 
         let now = unix_now();
         Self {
-            version: 1,
+            version: 2,
             created_at_unix: now,
             updated_at_unix: now,
             total_discoveries: 0,
@@ -77,19 +87,28 @@ impl Bestiary {
         fs::create_dir_all(BESTIARY_DIR)?;
 
         let now = unix_now();
+        let morphology = morphology(record);
+        let rarity = rarity(record);
+        let tags = tags(record);
         let species_name = species_name(
             record.seed,
             record.channels,
             record.motion_score,
             record.entropy_score,
+            &morphology,
         );
         let id = species_id(&species_name, record.seed, self.total_discoveries + 1);
 
         let entry = BestiaryEntry {
+            version: 2,
             id: id.clone(),
             species_name: species_name.clone(),
             discovered_at_unix: now,
+            discovery_rank: self.total_discoveries + 1,
             promotion_reason: reason.clone(),
+            morphology: morphology.clone(),
+            rarity: rarity.clone(),
+            tags: tags.clone(),
             record: record.clone(),
         };
 
@@ -105,9 +124,13 @@ impl Bestiary {
             score: record.score,
             motion_score: record.motion_score,
             entropy_score: record.entropy_score,
+            mass: record.mass,
             channels: record.channels,
             rules: record.rules,
             kernel_radius: record.kernel_radius,
+            morphology,
+            rarity,
+            tags,
             discovered_at_unix: now,
         });
 
@@ -116,15 +139,15 @@ impl Bestiary {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.entries.truncate(MAX_ENTRIES);
 
+        self.entries.truncate(MAX_ENTRIES);
         self.total_discoveries += 1;
         self.updated_at_unix = now;
         self.save()?;
 
         Ok(Some(format!(
-            "bestiary discovered: {} [{}]",
-            species_name, reason
+            "bestiary discovered: {} [{} / {}]",
+            species_name, reason, entry.rarity
         )))
     }
 
@@ -140,13 +163,19 @@ impl Bestiary {
     }
 
     pub fn status(&self) -> String {
-        format!("bestiary species={}", self.entries.len())
+        let rare = self
+            .entries
+            .iter()
+            .filter(|entry| entry.rarity == "rare" || entry.rarity == "mythic")
+            .count();
+
+        format!("bestiary species={} rare+={}", self.entries.len(), rare)
     }
 }
 
 fn promotion_reason(record: &RunRecord) -> Option<String> {
     if record.score >= 0.72 {
-        return Some("high overall survival score".to_string());
+        return Some("high survival score".to_string());
     }
 
     if record.motion_score >= 0.060 && record.entropy_score >= 0.300 && record.score >= 0.48 {
@@ -164,7 +193,77 @@ fn promotion_reason(record: &RunRecord) -> Option<String> {
     None
 }
 
-fn species_name(seed: u64, channels: usize, motion: f32, entropy: f32) -> String {
+fn morphology(record: &RunRecord) -> String {
+    if record.motion_score >= 0.140 && record.entropy_score >= 0.420 {
+        "swimmer".to_string()
+    } else if record.motion_score >= 0.095 {
+        "drifter".to_string()
+    } else if record.entropy_score >= 0.600 {
+        "bloom".to_string()
+    } else if record.mass >= 0.340 {
+        "reef".to_string()
+    } else if record.mass <= 0.070 && record.entropy_score >= 0.250 {
+        "spore".to_string()
+    } else if record.positive_rules >= record.negative_rules * 2 {
+        "radiant".to_string()
+    } else if record.negative_rules >= record.positive_rules * 2 {
+        "shadow".to_string()
+    } else {
+        "orbium".to_string()
+    }
+}
+
+fn rarity(record: &RunRecord) -> String {
+    if record.score >= 0.84 || (record.motion_score >= 0.18 && record.entropy_score >= 0.55) {
+        "mythic".to_string()
+    } else if record.score >= 0.72 || record.motion_score >= 0.12 {
+        "rare".to_string()
+    } else if record.score >= 0.58 || record.entropy_score >= 0.42 {
+        "uncommon".to_string()
+    } else {
+        "common".to_string()
+    }
+}
+
+fn tags(record: &RunRecord) -> Vec<String> {
+    let mut tags = Vec::new();
+
+    if record.motion_score >= 0.100 {
+        tags.push("mobile".to_string());
+    }
+    if record.entropy_score >= 0.450 {
+        tags.push("complex".to_string());
+    }
+    if record.mass >= 0.300 {
+        tags.push("dense".to_string());
+    }
+    if record.mass <= 0.080 {
+        tags.push("sparse".to_string());
+    }
+    if record.channels >= 6 {
+        tags.push("six-channel".to_string());
+    }
+    if record.rules >= 14 {
+        tags.push("rule-rich".to_string());
+    }
+    if record.kernel_radius >= 6 {
+        tags.push("wide-kernel".to_string());
+    }
+    if record.positive_rules > record.negative_rules {
+        tags.push("growth-biased".to_string());
+    }
+    if record.negative_rules > record.positive_rules {
+        tags.push("decay-biased".to_string());
+    }
+
+    if tags.is_empty() {
+        tags.push("stable".to_string());
+    }
+
+    tags
+}
+
+fn species_name(seed: u64, channels: usize, motion: f32, entropy: f32, morphology: &str) -> String {
     let prefixes = [
         "Abyssal",
         "Neon",
@@ -184,10 +283,29 @@ fn species_name(seed: u64, channels: usize, motion: f32, entropy: f32) -> String
         "Solar",
     ];
 
-    let bodies = [
-        "Drifter", "Manta", "Wisp", "Ray", "Nautilus", "Medusa", "Bloom", "Serpent", "Tide",
-        "Orbium", "Spore", "Lantern", "Glider", "Mote", "Reef", "Pulse",
-    ];
+    let bodies = match morphology {
+        "swimmer" => [
+            "Manta", "Ray", "Glider", "Serpent", "Nautilus", "Medusa", "Drifter", "Tide",
+        ],
+        "drifter" => [
+            "Drifter", "Wisp", "Mote", "Lantern", "Pulse", "Orbium", "Ray", "Tide",
+        ],
+        "bloom" => [
+            "Bloom", "Spore", "Reef", "Halo", "Pulse", "Medusa", "Wisp", "Orbium",
+        ],
+        "reef" => [
+            "Reef", "Bloom", "Nautilus", "Halo", "Orbium", "Lantern", "Spore", "Medusa",
+        ],
+        "spore" => [
+            "Spore", "Mote", "Wisp", "Lantern", "Pulse", "Bloom", "Orbium", "Drifter",
+        ],
+        "shadow" => [
+            "Umbra", "Ghost", "Wraith", "Nocturne", "Abyss", "Mote", "Wisp", "Serpent",
+        ],
+        _ => [
+            "Orbium", "Pulse", "Bloom", "Drifter", "Wisp", "Halo", "Nautilus", "Mote",
+        ],
+    };
 
     let suffixes = [
         "Prime", "Minor", "Major", "Vesper", "Aster", "Umbra", "Pelagic", "Nocturne", "Genesis",
