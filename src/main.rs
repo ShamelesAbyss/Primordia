@@ -78,16 +78,21 @@ impl Rule {
     ) -> Self {
         let from = rng.gen_range(0..channels);
         let to = rng.gen_range(0..channels);
-        let ring_count = rng.gen_range(2..6);
-        let sparsity = rng.gen_range(0.25..0.58);
-        let mut rings = Vec::new();
 
-        for _ in 0..ring_count {
-            rings.push(rng.gen_range(0.04..1.0));
+        let ring_count = rng.gen_range(2..6);
+        let angular_lobes = rng.gen_range(1..5) as f32;
+        let phase = rng.gen_range(0.0..std::f32::consts::TAU);
+        let asymmetry = rng.gen_range(0.00..0.38);
+        let noise_mix = rng.gen_range(0.00..0.18);
+
+        let mut ring_weights = Vec::with_capacity(ring_count);
+        for i in 0..ring_count {
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            ring_weights.push(sign * rng.gen_range(0.20..1.00));
         }
 
         let mut taps = Vec::new();
-        let mut total = 0.0;
+        let mut total_abs = 0.0;
 
         for dy in -radius..=radius {
             for dx in -radius..=radius {
@@ -95,29 +100,40 @@ impl Rule {
                     continue;
                 }
 
-                if rng.gen_bool(sparsity) {
-                    continue;
-                }
+                let dist_cells = ((dx * dx + dy * dy) as f32).sqrt();
+                let dist = dist_cells / radius as f32;
 
-                let dist = ((dx * dx + dy * dy) as f32).sqrt() / radius as f32;
                 if dist > 1.0 {
                     continue;
                 }
 
-                let ring = ((dist * ring_count as f32).floor() as usize).min(ring_count - 1);
-                let center = (ring as f32 + 0.5) / ring_count as f32;
-                let shell = (-((dist - center).powi(2)) / rng.gen_range(0.010..0.040)).exp();
-                let weight = shell * rings[ring];
+                let angle = (dy as f32).atan2(dx as f32);
+                let mut weight = 0.0;
 
-                if weight > 0.0001 {
+                for ring in 0..ring_count {
+                    let center = (ring as f32 + 0.55) / ring_count as f32;
+                    let width = rng.gen_range(0.035..0.105);
+                    let shell = (-((dist - center).powi(2)) / (2.0 * width * width)).exp();
+
+                    let angular_wave =
+                        1.0 + asymmetry * ((angle * angular_lobes + phase + ring as f32).cos());
+
+                    weight += shell * ring_weights[ring] * angular_wave;
+                }
+
+                if rng.gen_bool(noise_mix as f64) {
+                    weight += rng.gen_range(-0.18..0.18);
+                }
+
+                if weight.abs() > 0.0001 {
                     taps.push(KernelTap { dx, dy, weight });
-                    total += weight;
+                    total_abs += weight.abs();
                 }
             }
         }
 
         for tap in taps.iter_mut() {
-            tap.weight /= total.max(0.0001);
+            tap.weight /= total_abs.max(0.0001);
         }
 
         let mut mu = rng.gen_range(0.12..0.46);
@@ -142,7 +158,6 @@ impl Rule {
         }
     }
 }
-
 impl World {
     fn new(w: usize, h: usize, bias: Option<ChronicleBias>) -> Self {
         let seed = SystemTime::now()
