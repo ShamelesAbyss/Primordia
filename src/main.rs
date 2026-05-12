@@ -1027,6 +1027,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         bestiary.status(),
         genome_vault.status(),
     );
+    let mut gpu_live_enabled = false;
     let mut extinction_ticks: u64 = 0;
     let extinction_threshold: u64 = 1000;
     let mut extinction_rebirths: u64 = 0;
@@ -1201,29 +1202,13 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                                 "need at least two saved genomes before breeding".to_string();
                         }
                     },
-                    KeyCode::Char('G') => {
-                        #[cfg(feature = "gpu")]
-                        {
-                            match gpu::real_world_bridge_test(
-                                world.w as u32,
-                                world.h as u32,
-                                world.channels as u32,
-                                &world.cells,
-                            ) {
-                                Ok(note) => {
-                                    status_note = format!("GPU BRIDGE OK: {}", note);
-                                }
-                                Err(err) => {
-                                    status_note = format!("GPU BRIDGE FAILED: {}", err);
-                                }
-                            }
-                        }
-
-                        #[cfg(not(feature = "gpu"))]
-                        {
-                            status_note =
-                                "GPU bridge unavailable, build with --features gpu".to_string();
-                        }
+                    KeyCode::Char('g') => {
+                        gpu_live_enabled = !gpu_live_enabled;
+                        status_note = if gpu_live_enabled {
+                            "GPU LIVE MODE ENABLED: prototype shader backend active".to_string()
+                        } else {
+                            "CPU RAYON MODE ENABLED: full Primordia engine active".to_string()
+                        };
                     }
                     _ => {}
                 }
@@ -1232,7 +1217,33 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
         let mut catchup = 0;
         while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
-            world.step();
+            if gpu_live_enabled {
+                match gpu::live_step_readback(
+                    world.w as u32,
+                    world.h as u32,
+                    world.channels as u32,
+                    &world.cells,
+                ) {
+                    Ok(next_cells) if next_cells.len() == world.cells.len() => {
+                        world.cells = next_cells;
+                        world.tick = world.tick.saturating_add(1);
+                        world.update_motion_memory();
+                    }
+                    Ok(_) => {
+                        gpu_live_enabled = false;
+                        status_note = "GPU live disabled: readback size mismatch, returned to CPU"
+                            .to_string();
+                        world.step();
+                    }
+                    Err(err) => {
+                        gpu_live_enabled = false;
+                        status_note = format!("GPU live disabled: {}, returned to CPU", err);
+                        world.step();
+                    }
+                }
+            } else {
+                world.step();
+            }
 
             if world.is_extinct() {
                 extinction_ticks = extinction_ticks.saturating_add(1);
@@ -1388,7 +1399,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             frame.render_widget(canvas, chunks[1]);
 
             let footer = Paragraph::new(
-                "q / esc = save + quit    s = save genome    r = rebirth    l = random body    L = best body    n = mutate best    b = breed best two    B = breed random two    G = GPU bridge test",
+                "q quit | s save | r rebirth | l/L load | n mutate | b/B breed | g gpu/cpu    n = mutate best    b = breed best two    B = breed random two",
             )
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
