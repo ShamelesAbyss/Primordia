@@ -1028,6 +1028,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         genome_vault.status(),
     );
     let mut gpu_live_enabled = false;
+    #[cfg(feature = "gpu")]
+    let mut real_lenia_gpu: Option<gpu::RealLeniaGpuEngine> = None;
     let mut extinction_ticks: u64 = 0;
     let extinction_threshold: u64 = 1000;
     let mut extinction_rebirths: u64 = 0;
@@ -1247,14 +1249,52 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         });
                     }
 
-                    match gpu::live_lenia_step_readback(
-                        world.w as u32,
-                        world.h as u32,
-                        world.channels as u32,
-                        &world.cells,
-                        &gpu_rules,
-                        &gpu_taps,
-                    ) {
+                    let needs_engine = real_lenia_gpu
+                        .as_ref()
+                        .map(|engine| {
+                            !engine.matches(
+                                world.w as u32,
+                                world.h as u32,
+                                world.channels as u32,
+                                world.cells.len(),
+                                gpu_rules.len(),
+                                gpu_taps.len(),
+                            )
+                        })
+                        .unwrap_or(true);
+
+                    if needs_engine {
+                        match gpu::RealLeniaGpuEngine::new(
+                            world.w as u32,
+                            world.h as u32,
+                            world.channels as u32,
+                            world.cells.len(),
+                            gpu_rules.len(),
+                            gpu_taps.len(),
+                        ) {
+                            Ok(engine) => {
+                                real_lenia_gpu = Some(engine);
+                                status_note =
+                                    "GPU persistent real Lenia engine initialized".to_string();
+                            }
+                            Err(err) => {
+                                gpu_live_enabled = false;
+                                real_lenia_gpu = None;
+                                status_note = format!("GPU init failed: {}, returned to CPU", err);
+                                world.step();
+                                last_sim_tick += sim_step;
+                                catchup += 1;
+                                continue;
+                            }
+                        }
+                    }
+
+                    let result = real_lenia_gpu
+                        .as_mut()
+                        .expect("GPU engine should exist after initialization")
+                        .step(&world.cells, &gpu_rules, &gpu_taps);
+
+                    match result {
                         Ok(next_cells) if next_cells.len() == world.cells.len() => {
                             world.cells = next_cells;
                             world.tick = world.tick.saturating_add(1);
@@ -1262,6 +1302,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         }
                         Ok(_) => {
                             gpu_live_enabled = false;
+                            real_lenia_gpu = None;
                             status_note =
                                 "GPU live disabled: readback size mismatch, returned to CPU"
                                     .to_string();
@@ -1269,6 +1310,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         }
                         Err(err) => {
                             gpu_live_enabled = false;
+                            real_lenia_gpu = None;
                             status_note = format!("GPU live disabled: {}, returned to CPU", err);
                             world.step();
                         }

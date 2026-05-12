@@ -547,6 +547,7 @@ pub struct GpuTapData {
 }
 
 #[cfg(feature = "gpu")]
+#[allow(dead_code)]
 pub fn live_lenia_step_readback(
     width: u32,
     height: u32,
@@ -866,3 +867,292 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 "#;
+
+#[cfg(feature = "gpu")]
+pub struct RealLeniaGpuEngine {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    layout: wgpu::BindGroupLayout,
+    cells_buffer: wgpu::Buffer,
+    next_buffer: wgpu::Buffer,
+    rules_buffer: wgpu::Buffer,
+    taps_buffer: wgpu::Buffer,
+    params_buffer: wgpu::Buffer,
+    readback_buffer: wgpu::Buffer,
+    width: u32,
+    height: u32,
+    channels: u32,
+    cell_len: usize,
+    rule_len: usize,
+    tap_len: usize,
+}
+
+#[cfg(feature = "gpu")]
+impl RealLeniaGpuEngine {
+    pub fn new(
+        width: u32,
+        height: u32,
+        channels: u32,
+        cell_len: usize,
+        rule_len: usize,
+        tap_len: usize,
+    ) -> Result<Self, String> {
+        pollster::block_on(Self::new_async(
+            width, height, channels, cell_len, rule_len, tap_len,
+        ))
+    }
+
+    async fn new_async(
+        width: u32,
+        height: u32,
+        channels: u32,
+        cell_len: usize,
+        rule_len: usize,
+        tap_len: usize,
+    ) -> Result<Self, String> {
+        let instance = wgpu::Instance::default();
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or_else(|| "no GPU adapter found".to_string())?;
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("Primordia Persistent Real Lenia Device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .map_err(|err| format!("request_device failed: {err:?}"))?;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Primordia Persistent Real Lenia Shader"),
+            source: wgpu::ShaderSource::Wgsl(REAL_LENIA_WGSL.into()),
+        });
+
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Primordia Persistent Real Lenia Layout"),
+            entries: &[
+                storage_entry(0, true),
+                storage_entry(1, false),
+                storage_entry(2, true),
+                storage_entry(3, true),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Primordia Persistent Real Lenia Pipeline Layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Primordia Persistent Real Lenia Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let cell_bytes = (cell_len * std::mem::size_of::<f32>()) as u64;
+        let rule_bytes = (rule_len.max(1) * std::mem::size_of::<GpuRuleData>()) as u64;
+        let tap_bytes = (tap_len.max(1) * std::mem::size_of::<GpuTapData>()) as u64;
+
+        let cells_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Cells"),
+            size: cell_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let next_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Next"),
+            size: cell_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let rules_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Rules"),
+            size: rule_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let taps_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Taps"),
+            size: tap_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Params"),
+            size: (8 * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Primordia Persistent Readback"),
+            size: cell_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+            layout,
+            cells_buffer,
+            next_buffer,
+            rules_buffer,
+            taps_buffer,
+            params_buffer,
+            readback_buffer,
+            width,
+            height,
+            channels,
+            cell_len,
+            rule_len,
+            tap_len,
+        })
+    }
+
+    pub fn matches(
+        &self,
+        width: u32,
+        height: u32,
+        channels: u32,
+        cell_len: usize,
+        rule_len: usize,
+        tap_len: usize,
+    ) -> bool {
+        self.width == width
+            && self.height == height
+            && self.channels == channels
+            && self.cell_len == cell_len
+            && self.rule_len == rule_len
+            && self.tap_len == tap_len
+    }
+
+    pub fn step(
+        &mut self,
+        cells: &[f32],
+        rules: &[GpuRuleData],
+        taps: &[GpuTapData],
+    ) -> Result<Vec<f32>, String> {
+        if cells.len() != self.cell_len {
+            return Err(format!(
+                "cell length mismatch: got {}, expected {}",
+                cells.len(),
+                self.cell_len
+            ));
+        }
+
+        let params = [
+            self.width,
+            self.height,
+            self.channels,
+            self.cell_len as u32,
+            rules.len() as u32,
+            taps.len() as u32,
+            0,
+            0,
+        ];
+
+        self.queue
+            .write_buffer(&self.cells_buffer, 0, bytemuck::cast_slice(cells));
+        self.queue
+            .write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&params));
+
+        if !rules.is_empty() {
+            self.queue
+                .write_buffer(&self.rules_buffer, 0, bytemuck::cast_slice(rules));
+        }
+
+        if !taps.is_empty() {
+            self.queue
+                .write_buffer(&self.taps_buffer, 0, bytemuck::cast_slice(taps));
+        }
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Primordia Persistent Real Lenia Bind Group"),
+            layout: &self.layout,
+            entries: &[
+                bind_entry(0, &self.cells_buffer),
+                bind_entry(1, &self.next_buffer),
+                bind_entry(2, &self.rules_buffer),
+                bind_entry(3, &self.taps_buffer),
+                bind_entry(4, &self.params_buffer),
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Primordia Persistent Real Lenia Encoder"),
+            });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Primordia Persistent Real Lenia Pass"),
+                timestamp_writes: None,
+            });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+        }
+
+        let byte_size = (self.cell_len * std::mem::size_of::<f32>()) as u64;
+        encoder.copy_buffer_to_buffer(&self.next_buffer, 0, &self.readback_buffer, 0, byte_size);
+
+        self.queue.submit(Some(encoder.finish()));
+
+        let slice = self.readback_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+
+        self.device.poll(wgpu::Maintain::Wait);
+
+        receiver
+            .recv()
+            .map_err(|err| format!("GPU readback receive failed: {err:?}"))?
+            .map_err(|err| format!("GPU readback map failed: {err:?}"))?;
+
+        let mapped = slice.get_mapped_range();
+        let values = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
+
+        drop(mapped);
+        self.readback_buffer.unmap();
+
+        Ok(values)
+    }
+}
