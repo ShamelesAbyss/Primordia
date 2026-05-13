@@ -29,11 +29,11 @@ use std::{
 };
 
 const MIN_CHANNELS: usize = 3;
-const MAX_CHANNELS: usize = 12;
+const MAX_CHANNELS: usize = 10;
 const MIN_RULES: usize = 4;
-const MAX_RULES: usize = 28;
+const MAX_RULES: usize = 24;
 const MIN_RADIUS: i32 = 4;
-const MAX_RADIUS: i32 = 9;
+const MAX_RADIUS: i32 = 8;
 const DT: f32 = 0.048;
 
 #[derive(Clone)]
@@ -806,8 +806,8 @@ impl World {
             self.next = vec![0.0; self.w * self.h * self.channels];
         }
 
-        let available_slots = 96usize.saturating_sub(self.rules.len());
-        let take_rules = available_slots.min(snapshot.rules.len()).min(24);
+        let available_slots = 72usize.saturating_sub(self.rules.len());
+        let take_rules = available_slots.min(snapshot.rules.len()).min(18);
 
         for rule in snapshot.rules.into_iter().take(take_rules) {
             self.rules.push(Rule {
@@ -1028,7 +1028,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let _gpu_status: GpuStatus = gpu::probe_gpu();
     let mut world = World::new(88, 36, chronicle.suggest_bias());
 
-    let sim_step = Duration::from_millis(16);
+    let sim_step = Duration::from_millis(33);
     let render_step = Duration::from_millis(33);
 
     let mut last_sim_tick = Instant::now();
@@ -1265,7 +1265,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         }
 
         let mut catchup = 0;
-        while last_sim_tick.elapsed() >= sim_step && catchup < 4 {
+        while last_sim_tick.elapsed() >= sim_step && catchup < 2 {
             if gpu_live_enabled {
                 #[cfg(feature = "gpu")]
                 {
