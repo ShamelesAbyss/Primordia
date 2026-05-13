@@ -864,7 +864,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             delta = delta + growth * rule.weight;
         }
 
-        next_cells[out_i] = clamp(old + delta * 0.08, 0.0, 1.0);
+        next_cells[out_i] = clamp(old * 0.985 + delta * 0.035, 0.0, 1.0);
     }
 }
 "#;

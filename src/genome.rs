@@ -319,14 +319,7 @@ impl GenomeVault {
 
         mutate_rules(&mut child, &mut rng, strength);
 
-        if child.cells.is_empty() {
-            return Ok(child);
-        }
-
-        for cell in &mut child.cells {
-            let drift = rng.gen_range(-strength..strength) * 0.42;
-            *cell = (*cell + drift).clamp(0.0, 1.0);
-        }
+        child.cells.clear();
 
         Ok(child)
     }

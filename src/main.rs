@@ -1157,6 +1157,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         let child_id = genome_vault.save_snapshot(&child_snapshot)?;
 
                         world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+                        for _ in 0..5 {
+                            world.seed_life();
+                        }
+                        world.refresh_motion_baseline();
 
                         chronicle.save()?;
                         bestiary.save()?;
@@ -1174,6 +1178,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         Some((parent_id, child_snapshot)) => {
                             let child_id = genome_vault.save_snapshot(&child_snapshot)?;
                             world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+                            for _ in 0..5 {
+                                world.seed_life();
+                            }
+                            world.refresh_motion_baseline();
 
                             chronicle.save()?;
                             bestiary.save()?;
@@ -1195,6 +1203,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         Some((parent_a, parent_b, child_snapshot)) => {
                             let child_id = genome_vault.save_snapshot(&child_snapshot)?;
                             world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+                            for _ in 0..5 {
+                                world.seed_life();
+                            }
+                            world.refresh_motion_baseline();
 
                             chronicle.save()?;
                             bestiary.save()?;
@@ -1217,6 +1229,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                         Some((parent_a, parent_b, child_snapshot)) => {
                             let child_id = genome_vault.save_snapshot(&child_snapshot)?;
                             world = World::from_genome_snapshot(child_snapshot, world.w, world.h);
+                            for _ in 0..5 {
+                                world.seed_life();
+                            }
+                            world.refresh_motion_baseline();
 
                             chronicle.save()?;
                             bestiary.save()?;
