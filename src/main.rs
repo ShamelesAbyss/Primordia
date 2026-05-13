@@ -1544,9 +1544,34 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 .block(Block::default().borders(Borders::ALL).title("Living Field"));
             frame.render_widget(canvas, chunks[1]);
 
-            let footer = Paragraph::new(
-                "q quit | s save | r rebirth | l/L load | m current mutate | n best mutate | b/B breed | g cpu/gpu",
-            )
+            let footer = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("q", Style::default().fg(Color::Red)),
+                    Span::raw(" quit  "),
+                    Span::styled("s", Style::default().fg(Color::Green)),
+                    Span::raw(" save  "),
+                    Span::styled("r", Style::default().fg(Color::Yellow)),
+                    Span::raw(" rebirth  "),
+                    Span::styled("g", Style::default().fg(Color::Cyan)),
+                    Span::raw(" cpu/gpu"),
+                ]),
+                Line::from(vec![
+                    Span::styled("l", Style::default().fg(Color::LightBlue)),
+                    Span::raw(" load random  "),
+                    Span::styled("L", Style::default().fg(Color::LightBlue)),
+                    Span::raw(" load best  "),
+                    Span::styled("m", Style::default().fg(Color::Magenta)),
+                    Span::raw(" mutate current  "),
+                    Span::styled("n", Style::default().fg(Color::Magenta)),
+                    Span::raw(" mutate best"),
+                ]),
+                Line::from(vec![
+                    Span::styled("b", Style::default().fg(Color::LightGreen)),
+                    Span::raw(" breed best two  "),
+                    Span::styled("B", Style::default().fg(Color::LightGreen)),
+                    Span::raw(" breed random two"),
+                ]),
+            ])
             .block(Block::default().borders(Borders::ALL).title("Controls"));
             frame.render_widget(footer, chunks[2]);
         })?;
