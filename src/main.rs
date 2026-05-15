@@ -29,7 +29,7 @@ use std::{
 };
 
 const MIN_CHANNELS: usize = 3;
-const MAX_CHANNELS: usize = 10;
+const MAX_CHANNELS: usize = 12;
 const MIN_RULES: usize = 4;
 const MAX_RULES: usize = 24;
 const MIN_RADIUS: i32 = 4;
@@ -714,8 +714,16 @@ impl World {
         true
     }
 
+    fn channel_display_name(&self, c: usize) -> &'static str {
+        Self::channel_name(c)
+    }
+
+    fn channel_display_color(&self, c: usize) -> Color {
+        Self::channel_color(c)
+    }
+
     fn channel_name(c: usize) -> &'static str {
-        match c % 12 {
+        match c % 13 {
             0 => "cyan",
             1 => "green",
             2 => "magenta",
@@ -727,12 +735,13 @@ impl World {
             8 => "teal",
             9 => "lime",
             10 => "pink",
+            11 => "void",
             _ => "white",
         }
     }
 
     fn channel_color(c: usize) -> Color {
-        match c % 12 {
+        match c % 13 {
             0 => Color::Cyan,
             1 => Color::Green,
             2 => Color::Magenta,
@@ -744,6 +753,7 @@ impl World {
             8 => Color::Rgb(0, 220, 180),
             9 => Color::LightGreen,
             10 => Color::LightMagenta,
+            11 => Color::Black,
             _ => Color::White,
         }
     }
@@ -1516,9 +1526,20 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
             let mut mass_spans = Vec::new();
             for c in 0..world.channels {
+                let mass = world.channel_mass(c);
+
+                if mass > 0.0001 {
+                    mass_spans.push(Span::styled(
+                        format!("{}={:.3}  ", world.channel_display_name(c), mass),
+                        Style::default().fg(world.channel_display_color(c)),
+                    ));
+                }
+            }
+
+            if mass_spans.is_empty() {
                 mass_spans.push(Span::styled(
-                    format!("{}={:.3}  ", World::channel_name(c), world.channel_mass(c)),
-                    Style::default().fg(World::channel_color(c)),
+                    "channels dormant",
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
 
