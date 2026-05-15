@@ -1046,7 +1046,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut bestiary = Bestiary::load_or_new();
     let mut genome_vault = GenomeVault::load_or_new();
     let _gpu_status: GpuStatus = gpu::probe_gpu();
-    let mut world = World::new(132, 54, chronicle.suggest_bias());
+    let mut world = World::new(132, 72, chronicle.suggest_bias());
 
     let sim_step = Duration::from_millis(33);
     let render_step = Duration::from_millis(33);
