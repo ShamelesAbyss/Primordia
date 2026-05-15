@@ -582,6 +582,26 @@ impl World {
         total / (self.w * self.h) as f32
     }
 
+    fn visible_cells(&self) -> usize {
+        let mut visible = 0usize;
+
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let mut strongest = 0.0f32;
+
+                for c in 0..self.channels {
+                    strongest = strongest.max(self.cells[self.idx(x, y, c)]);
+                }
+
+                if strongest >= 0.008 {
+                    visible += 1;
+                }
+            }
+        }
+
+        visible
+    }
+
     fn center_of_mass(&self) -> (f32, f32, f32) {
         let mut total = 0.0;
         let mut sx = 0.0;
@@ -1508,9 +1528,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     Span::raw("  |  randomized multi-channel Lenia genome"),
                 ]),
                 Line::from(format!(
-                    "seed={}  tick={}  mass={:.4}  motion={:.3}  entropy={:.3}  field={}x{}",
+                    "seed={}  tick={}  visible={}/{}  mass={:.4}  motion={:.3}  entropy={:.3}  field={}x{}",
                     world.seed,
                     world.tick,
+                    world.visible_cells(),
+                    world.w * world.h,
                     world.mass(),
                     world.motion_score,
                     world.entropy_score,
