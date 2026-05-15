@@ -1486,7 +1486,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 .constraints([
                     Constraint::Length(8),
                     Constraint::Min(10),
-                    Constraint::Length(3),
+                    Constraint::Length(5),
                 ])
                 .split(area);
 
