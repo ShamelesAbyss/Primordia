@@ -1,5 +1,6 @@
 mod bestiary;
 mod chronicle;
+mod classic_lenia;
 mod genome;
 mod gpu;
 
