@@ -753,7 +753,7 @@ impl World {
             8 => Color::Rgb(0, 220, 180),
             9 => Color::LightGreen,
             10 => Color::LightMagenta,
-            11 => Color::Rgb(110, 110, 110),
+            11 => Color::Black,
             _ => Color::White,
         }
     }
