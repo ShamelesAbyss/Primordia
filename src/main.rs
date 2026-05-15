@@ -28,8 +28,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const MIN_CHANNELS: usize = 3;
-const MAX_CHANNELS: usize = 12;
+const MIN_CHANNELS: usize = 13;
+const MAX_CHANNELS: usize = 13;
 const MIN_RULES: usize = 4;
 const MAX_RULES: usize = 24;
 const MIN_RADIUS: i32 = 4;
