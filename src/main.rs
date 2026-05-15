@@ -435,8 +435,8 @@ impl World {
     }
 
     fn resize(&mut self, new_w: usize, new_h: usize) {
-        let new_w = new_w.max(24);
-        let new_h = new_h.max(12);
+        let new_w = new_w.max(24).max(self.w);
+        let new_h = new_h.max(12).max(self.h);
 
         if new_w == self.w && new_h == self.h {
             return;
