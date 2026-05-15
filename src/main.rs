@@ -735,7 +735,7 @@ impl World {
             8 => "teal",
             9 => "lime",
             10 => "pink",
-            11 => "void",
+            11 => "black",
             _ => "white",
         }
     }
